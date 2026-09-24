@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 930">
+  <rect width="900" height="930" fill="#f3f4f6"/>
+
+  <g transform="translate(45,45) scale(0.36)">
+    <rect width="1000" height="1000" rx="225" fill="#101010"/>
+    <text x="500" y="720" font-family="'Times New Roman'" font-weight="bold" font-size="580" fill="#ffffff" text-anchor="middle">&#x03C0;</text>
+  </g>
+  <text x="225" y="450" font-family="Arial" font-size="28" fill="#555" text-anchor="middle">A Times Bold</text>
+
+  <g transform="translate(495,45) scale(0.36)">
+    <rect width="1000" height="1000" rx="225" fill="#101010"/>
+    <text x="500" y="720" font-family="Cambria" font-weight="bold" font-size="560" fill="#ffffff" text-anchor="middle">&#x03C0;</text>
+  </g>
+  <text x="675" y="450" font-family="Arial" font-size="28" fill="#555" text-anchor="middle">B Cambria Bold</text>
+
+  <g transform="translate(45,495) scale(0.36)">
+    <rect width="1000" height="1000" rx="225" fill="#101010"/>
+    <text x="500" y="720" font-family="Georgia" font-weight="bold" font-size="560" fill="#ffffff" text-anchor="middle">&#x03C0;</text>
+  </g>
+  <text x="225" y="900" font-family="Arial" font-size="28" fill="#555" text-anchor="middle">C Georgia Bold</text>
+
+  <g transform="translate(495,495) scale(0.36)">
+    <rect width="1000" height="1000" rx="225" fill="#101010"/>
+    <text x="500" y="720" font-family="'Palatino Linotype'" font-weight="bold" font-size="560" fill="#ffffff" text-anchor="middle">&#x03C0;</text>
+  </g>
+  <text x="675" y="900" font-family="Arial" font-size="28" fill="#555" text-anchor="middle">D Palatino Bold</text>
+</svg>
