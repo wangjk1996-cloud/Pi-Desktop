@@ -16,6 +16,33 @@ const net = require("net");
 const path = require("path");
 const fs = require("fs");
 
+// 旧版数据目录迁移: %APPDATA%\pi-web-app -> %APPDATA%\pi-desktop (一次性, 项目更名遗留)
+try {
+  const roaming = process.env.APPDATA;
+  if (roaming) {
+    const oldDir = path.join(roaming, "pi-web-app");
+    const newDir = app.getPath("userData");
+    if (fs.existsSync(oldDir) && oldDir !== newDir) {
+      if (!fs.existsSync(newDir)) {
+        fs.renameSync(oldDir, newDir);
+      } else {
+        // Electron 可能已提前创建新目录: 逐项迁移关键数据(内核/运行时/日志)
+        for (const item of ["kernel", "npm-runtime", "pi-desktop-server.log", "update.log", "update-state.json"]) {
+          const from = path.join(oldDir, item);
+          const to = path.join(newDir, item);
+          try {
+            if (fs.existsSync(from) && !fs.existsSync(to)) fs.renameSync(from, to);
+          } catch {
+            /* 单项失败跳过 */
+          }
+        }
+      }
+    }
+  }
+} catch {
+  /* 迁移失败则按全新安装处理, 内核会自动重新下载 */
+}
+
 const DEFAULT_PORT = 30141;
 const APP_URL_HOST = "127.0.0.1";
 const NPM_REGISTRY = "https://registry.npmmirror.com";

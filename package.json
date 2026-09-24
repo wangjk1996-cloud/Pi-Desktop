@@ -1,6 +1,6 @@
 {
-  "name": "pi-web-app",
-  "version": "1.1.4",
+  "name": "pi-desktop-app",
+  "version": "1.2.0",
   "description": "Pi Desktop — pi coding agent 的桌面客户端, 内核(pi/pi-web)自动更新",
   "author": "wangjk1996-cloud",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "electron-updater": "^6.3.0"
   },
   "build": {
-    "appId": "com.github.wangjk1996-cloud.piweb",
+    "appId": "com.github.wangjk1996-cloud.pidesktop",
     "productName": "Pi Desktop",
     "directories": {
       "output": "dist",
@@ -56,7 +56,7 @@
       {
         "provider": "github",
         "owner": "wangjk1996-cloud",
-        "repo": "pi-web-app",
+        "repo": "Pi-Desktop",
         "releaseType": "release"
       }
     ]

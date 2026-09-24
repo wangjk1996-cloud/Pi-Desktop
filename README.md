@@ -35,7 +35,7 @@ pi coding agent 的 Windows 桌面客户端。双击即用、独立窗口、托�
 ## 与会话数据
 
 - 会话、模型配置、凭据等与命令行的 `pi` / `pi-web` 完全共享（`~/.pi/agent`），可随时互换使用
-- 内核与日志位于 `%APPDATA%\pi-web-app\`：
+- 内核与日志位于 `%APPDATA%\pi-desktop-app\`：
   - `kernel/` 应用内置内核
   - `pi-desktop-server.log` 服务日志
   - `update.log` 更新日志
@@ -43,7 +43,7 @@ pi coding agent 的 Windows 桌面客户端。双击即用、独立窗口、托�
 ## 常见问题
 
 - **双击没有反应**：先看系统托盘，应用可能已在运行（单实例锁会阻止重复启动）；或在任务管理器结束残留的 Pi Desktop 进程后重试
-- **首次启动失败**：检查网络连接后重试，日志见 `%APPDATA%\pi-web-app\update.log`
+- **首次启动失败**：检查网络连接后重试，日志见 `%APPDATA%\pi-desktop-app\update.log`
 - **卸载**：通过 Windows 设置正常卸载；用户数据保留在上述目录，可手动删除
 
 ## 从源码构建
