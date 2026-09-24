@@ -9,7 +9,7 @@
 //   5. 壳自更新: electron-updater 从 GitHub Releases 检查下载
 "use strict";
 
-const { app, BrowserWindow, Tray, Menu, dialog, shell } = require("electron");
+const { app, BrowserWindow, WebContentsView, Tray, Menu, dialog, shell, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const net = require("net");
@@ -82,7 +82,6 @@ function stateFile() {
   return path.join(app.getPath("userData"), "update-state.json");
 }
 
-let mainWindow = null;
 let tray = null;
 let serverProcess = null;
 let serverPort = DEFAULT_PORT;
@@ -90,6 +89,12 @@ let quitting = false;
 let quitUpdateDone = false;
 let reusedExternal = false; // 当前复用的是外部 pi-web 服务(可能随时退出)
 let watchdog = null;
+
+// 多窗口: id -> { id, win, strip, content, url, project }
+const MAX_WINDOWS = 5;
+const STRIP_HEIGHT = 36;
+const appWindows = new Map();
+let winSeq = 0;
 
 function appendLog(file, text) {
   try {
@@ -446,7 +451,7 @@ function startServer(port) {
     serverProcess.on("exit", (code, signal) => {
       appendLog(logFile(), `===== ${new Date().toISOString()} 服务退出 code=${code} signal=${signal} =====\n`);
       serverProcess = null;
-      if (!quitting && mainWindow && !mainWindow.isDestroyed()) {
+      if (!quitting) {
         dialog.showErrorBox(
           "服务异常终止",
           `服务进程意外退出（代码：${code}）。\n日志文件：${logFile()}`
@@ -467,101 +472,210 @@ function appIcon() {
     : path.join(__dirname, "build", "icon.ico");
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function homeUrl() {
+  return `http://${APP_URL_HOST}:${serverPort}`;
+}
+
+function stripHtml() {
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#101010}
+#bar{display:flex;align-items:center;height:${STRIP_HEIGHT}px;padding:0 150px 0 10px;
+  -webkit-app-region:drag;color:#dbe4f0;font:12px "Segoe UI",sans-serif;user-select:none}
+#add{-webkit-app-region:no-drag;width:26px;height:26px;min-width:26px;border:none;border-radius:6px;
+  background:transparent;color:#dbe4f0;font-size:17px;cursor:pointer;line-height:1}
+#add:hover{background:rgba(255,255,255,.12)}
+#add:disabled{opacity:.3;cursor:default}
+#title{margin-left:8px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style></head><body><div id="bar"><button id="add" title="新建窗口">+</button><span id="title">Pi Desktop</span></div></body></html>`;
+  return "data:text/html;charset=utf-8," + encodeURIComponent(html);
+}
+
+function isLightColor(rgb) {
+  const m = String(rgb).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!m) return false;
+  const l = 0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3]);
+  return l > 150;
+}
+
+function toHexColor(rgb) {
+  const m = String(rgb).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!m) return null;
+  const h = (n) => Number(n).toString(16).padStart(2, "0");
+  return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
+}
+
+// 每个窗口 = 顶部自绘标题条(拖动区 + 「+」新窗口按钮 + 项目名) + pi-web 内容视图
+function createAppWindow(url) {
+  if (appWindows.size >= MAX_WINDOWS) return null;
+  const id = ++winSeq;
+  const win = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 940,
     minHeight: 600,
     title: "Pi Desktop",
     icon: appIcon(),
-    autoHideMenuBar: true,
     backgroundColor: "#0b1220",
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#101010", symbolColor: "#dbe4f0", height: STRIP_HEIGHT },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+  });
+  // 新窗口层叠偏移, 不与已有窗口完全重叠
+  if (appWindows.size) {
+    const [x, y] = win.getPosition();
+    win.setPosition(x + appWindows.size * 28, y + appWindows.size * 28);
+  }
+
+  const strip = new WebContentsView({
     webPreferences: {
+      preload: path.join(__dirname, "strip-preload.js"),
       contextIsolation: true,
-      nodeIntegration: false,
       sandbox: true,
-      spellcheck: false,
     },
   });
+  const content = new WebContentsView({
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+  });
+  win.contentView.addChildView(strip);
+  win.contentView.addChildView(content);
 
-  mainWindow.loadURL(`http://${APP_URL_HOST}:${serverPort}`);
+  const layout = () => {
+    const [w, h] = win.getContentSize();
+    strip.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
+    content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
+  };
+  layout();
+  win.on("resize", layout);
+
+  const entry = { id, win, strip, content, url: url || homeUrl(), project: "" };
+  appWindows.set(id, entry);
+
+  strip.webContents.loadURL(stripHtml());
+  content.webContents.loadURL(entry.url);
+
+  // 页面标题里的项目名 -> 标题条 / 任务栏标题 / 托盘项目列表
+  content.webContents.on("page-title-updated", (e, title) => {
+    e.preventDefault();
+    const base = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
+    entry.project = base;
+    const text = base ? `Pi Desktop - ${base} | Powered by Pi` : "Pi Desktop | Powered by Pi";
+    win.setTitle(text);
+    if (!strip.webContents.isDestroyed()) strip.webContents.send("app:title", text);
+    rebuildTray();
+  });
+  content.webContents.on("did-navigate", (_e, navUrl) => {
+    entry.url = navUrl;
+  });
+
+  // 内容加载后同步标题条/原生按钮配色, 与 pi-web 顶栏协调
+  content.webContents.on("did-finish-load", async () => {
+    try {
+      const bg = await content.webContents.executeJavaScript(
+        `(() => { const el = document.querySelector("header") || document.body;
+          const c = getComputedStyle(el).backgroundColor;
+          return c && c !== "rgba(0, 0, 0, 0)" ? c : "rgb(16,16,16)"; })()`
+      );
+      const hex = toHexColor(bg);
+      if (hex) {
+        const fg = isLightColor(bg) ? "#1f2328" : "#dbe4f0";
+        win.setTitleBarOverlay({ color: hex, symbolColor: fg, height: STRIP_HEIGHT });
+        if (!strip.webContents.isDestroyed()) strip.webContents.send("app:bar-color", hex, fg);
+      }
+    } catch {
+      /* ignore */
+    }
+  });
 
   // 服务未就绪/被重启时自动重试加载, 不留白板错误页
-  mainWindow.webContents.on("did-fail-load", () => {
+  content.webContents.on("did-fail-load", () => {
     setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(`http://${APP_URL_HOST}:${serverPort}`);
-      }
+      if (!content.webContents.isDestroyed()) content.webContents.loadURL(entry.url);
     }, 3000);
   });
 
   // 外部链接交给系统浏览器
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  content.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
   });
-  mainWindow.webContents.on("will-navigate", (e, url) => {
-    if (!url.startsWith(`http://${APP_URL_HOST}:${serverPort}`)) {
+  content.webContents.on("will-navigate", (e, navUrl) => {
+    if (!navUrl.startsWith(`http://${APP_URL_HOST}:${serverPort}`)) {
       e.preventDefault();
-      if (/^https?:/i.test(url)) shell.openExternal(url);
+      if (/^https?:/i.test(navUrl)) shell.openExternal(navUrl);
     }
   });
 
-  // 关窗 -> 托盘驻留, 服务不断
-  mainWindow.on("close", (e) => {
-    if (!quitting) {
-      e.preventDefault();
-      mainWindow.hide();
-    }
+  win.on("closed", () => {
+    appWindows.delete(id);
+    broadcastCanNew();
+    rebuildTray();
   });
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
-  mainWindow.on("page-title-updated", (e, title) => {
-    e.preventDefault();
-    const base = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
-    mainWindow.setTitle(
-      base ? `Pi Desktop - ${base} | Powered by Pi` : "Pi Desktop | Powered by Pi"
-    );
-  });
+
+  broadcastCanNew();
+  rebuildTray();
+  return entry;
 }
+
+function focusWindow(id) {
+  const entry = appWindows.get(id);
+  if (!entry || entry.win.isDestroyed()) return;
+  if (entry.win.isMinimized()) entry.win.restore();
+  entry.win.show();
+  entry.win.focus();
+}
+
+function openWindowOrHome() {
+  if (appWindows.size === 0) createAppWindow();
+  else focusWindow([...appWindows.keys()][0]);
+}
+
+function broadcastCanNew() {
+  const ok = appWindows.size < MAX_WINDOWS;
+  for (const { strip } of appWindows.values()) {
+    if (!strip.webContents.isDestroyed()) strip.webContents.send("app:can-new", ok);
+  }
+}
+
+// 「+」按钮(标题条)新开窗口, 上限 MAX_WINDOWS
+ipcMain.on("app:new-window", (e) => {
+  for (const { strip } of appWindows.values()) {
+    if (strip.webContents === e.sender) {
+      if (appWindows.size < MAX_WINDOWS) createAppWindow();
+      return;
+    }
+  }
+});
 
 function createTray() {
   tray = new Tray(appIcon());
   tray.setToolTip("Pi Desktop");
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: "打开 Pi Desktop",
-        click: () => {
-          if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-          else {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        },
-      },
-      {
-        label: "在浏览器中打开",
-        click: () => shell.openExternal(`http://${APP_URL_HOST}:${serverPort}`),
-      },
-      { type: "separator" },
-      {
-        label: "退出",
-        click: () => {
-          quitting = true;
-          app.quit();
-        },
-      },
-    ])
-  );
-  tray.on("click", () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      mainWindow.focus();
+  tray.on("click", () => openWindowOrHome());
+  rebuildTray();
+}
+
+// 托盘菜单动态重建: 「已打开的项目」只列当前打开的窗口
+function rebuildTray() {
+  if (!tray) return;
+  const items = [
+    { label: "打开 Pi Desktop", click: () => openWindowOrHome() },
+    { label: "在浏览器中打开", click: () => shell.openExternal(homeUrl()) },
+  ];
+  if (appWindows.size) {
+    items.push({ type: "separator" });
+    items.push({ label: "已打开的项目", enabled: false });
+    for (const entry of appWindows.values()) {
+      items.push({ label: entry.project || "首页", click: () => focusWindow(entry.id) });
     }
+  }
+  items.push({ type: "separator" });
+  items.push({
+    label: "退出",
+    click: () => {
+      quitting = true;
+      app.quit();
+    },
   });
+  tray.setContextMenu(Menu.buildFromTemplate(items));
 }
 
 // ---------------------------------------------------------------------------
@@ -611,8 +725,11 @@ function startWatchdog() {
     try {
       serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
       await startServer(serverPort);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(`http://${APP_URL_HOST}:${serverPort}`);
+      for (const entry of appWindows.values()) {
+        if (!entry.content.webContents.isDestroyed()) {
+          entry.url = `http://${APP_URL_HOST}:${serverPort}`;
+          entry.content.webContents.loadURL(entry.url);
+        }
       }
     } catch (err) {
       appendLog(logFile(), `看门狗重启服务失败: ${err && err.message}\n`);
@@ -628,10 +745,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.show();
-      mainWindow.focus();
-    }
+    openWindowOrHome();
   });
 
   app.whenReady().then(async () => {
@@ -661,7 +775,7 @@ if (!gotLock) {
       return;
     }
 
-    createWindow();
+    createAppWindow();
     createTray();
     setupShellAutoUpdate();
     startWatchdog();
@@ -695,6 +809,6 @@ if (!gotLock) {
   });
 
   app.on("activate", () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+    openWindowOrHome();
   });
 }
