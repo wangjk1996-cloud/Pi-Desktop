@@ -529,16 +529,29 @@ function layoutWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const [w, h] = mainWindow.getContentSize();
   if (stripView) stripView.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
-  for (const t of tabs.values()) {
-    t.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
-  }
+  const active = tabs.get(activeTabId);
+  if (active) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
 }
 
 function switchTab(id) {
   if (!tabs.has(id) || !mainWindow || mainWindow.isDestroyed()) return;
+  // 非活动标签整体从窗口卸下(页面状态保留在后台), 不参与绘制, 保证流畅
+  const prev = tabs.get(activeTabId);
+  if (prev && prev.id !== id) {
+    try {
+      mainWindow.contentView.removeChildView(prev.content);
+    } catch {
+      /* ignore */
+    }
+  }
   activeTabId = id;
-  for (const t of tabs.values()) t.content.setVisible(t.id === id);
   const t = tabs.get(id);
+  try {
+    mainWindow.contentView.addChildView(t.content);
+  } catch {
+    /* ignore */
+  }
+  layoutWindow();
   mainWindow.setTitle(
     t.project ? `Pi Desktop - ${t.project} | Powered by Pi` : "Pi Desktop | Powered by Pi"
   );
@@ -566,6 +579,17 @@ function wireContentEvents(entry) {
 
   // 内容加载后同步标签条/原生按钮配色, 与 pi-web 顶栏协调
   content.webContents.on("did-finish-load", async () => {
+    // 新建的标签页(+号打开): 自动进入 pi-web 的新会话页, 与应用默认首页一致
+    if (entry.fresh) {
+      entry.fresh = false;
+      content.webContents
+        .executeJavaScript(
+          `(() => { const els = [...document.querySelectorAll("button, a")];
+            const b = els.find((x) => /new session|新会话/i.test(x.textContent || ""));
+            if (b) b.click(); })()`
+        )
+        .catch(() => {});
+    }
     if (entry.id !== activeTabId || !mainWindow || mainWindow.isDestroyed()) return;
     try {
       const bg = await content.webContents.executeJavaScript(
@@ -613,7 +637,7 @@ function newTab(url) {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   });
   mainWindow.contentView.addChildView(content);
-  const entry = { id, content, url: url || homeUrl(), project: "" };
+  const entry = { id, content, url: url || homeUrl(), project: "", fresh: tabs.size > 0 };
   tabs.set(id, entry);
   wireContentEvents(entry);
   content.webContents.loadURL(entry.url);
