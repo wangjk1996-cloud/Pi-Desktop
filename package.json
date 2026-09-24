@@ -1,0 +1,71 @@
+{
+  "name": "pi-web-app",
+  "version": "1.0.0",
+  "description": "Pi Web 桌面客户端 — pi coding agent 的本地桌面端, 内核(pi/pi-web)自动更新",
+  "author": "wangjk1996-cloud",
+  "license": "MIT",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "release": "electron-builder --win --publish always"
+  },
+  "devDependencies": {
+    "electron": "39.8.10",
+    "electron-builder": "^26.0.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.0"
+  },
+  "build": {
+    "appId": "com.github.wangjk1996-cloud.piweb",
+    "productName": "Pi Web",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/npm",
+        "to": "npm",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Pi Web",
+      "artifactName": "PiWeb-${version}-setup.exe"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "wangjk1996-cloud",
+        "repo": "pi-web-app",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "allowScripts": {
+    "electron@39.8.10": true,
+    "electron-winstaller@5.4.0": true
+  }
+}
