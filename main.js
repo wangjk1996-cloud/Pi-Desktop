@@ -61,6 +61,8 @@ let serverProcess = null;
 let serverPort = DEFAULT_PORT;
 let quitting = false;
 let quitUpdateDone = false;
+let reusedExternal = false; // 当前复用的是外部 pi-web 服务(可能随时退出)
+let watchdog = null;
 
 function appendLog(file, text) {
   try {
@@ -428,6 +430,15 @@ function createWindow() {
 
   mainWindow.loadURL(`http://${APP_URL_HOST}:${serverPort}`);
 
+  // 服务未就绪/被重启时自动重试加载, 不留白板错误页
+  mainWindow.webContents.on("did-fail-load", () => {
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL(`http://${APP_URL_HOST}:${serverPort}`);
+      }
+    }, 3000);
+  });
+
   // 外部链接交给系统浏览器
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
@@ -531,6 +542,28 @@ function setupShellAutoUpdate() {
 }
 
 // ---------------------------------------------------------------------------
+// 看门狗: 复用的外部服务一旦退出(比如用户关掉 cmd 的 pi-web),
+// 自动起应用自己的服务并让窗口重新加载
+// ---------------------------------------------------------------------------
+function startWatchdog() {
+  watchdog = setInterval(async () => {
+    if (quitting || !reusedExternal) return;
+    if (await portResponds(serverPort, 3000)) return;
+    appendLog(logFile(), `${new Date().toISOString()} 外部服务已退出, 启动内置服务\n`);
+    reusedExternal = false;
+    try {
+      serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
+      await startServer(serverPort);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.loadURL(`http://${APP_URL_HOST}:${serverPort}`);
+      }
+    } catch (err) {
+      appendLog(logFile(), `看门狗重启服务失败: ${err && err.message}\n`);
+    }
+  }, 5000);
+}
+
+// ---------------------------------------------------------------------------
 // 应用生命周期
 // ---------------------------------------------------------------------------
 const gotLock = app.requestSingleInstanceLock();
@@ -558,6 +591,7 @@ if (!gotLock) {
         await startServer(serverPort);
       } else if (await portResponds(DEFAULT_PORT)) {
         serverPort = DEFAULT_PORT;
+        reusedExternal = true; // 复用的是别人的服务, 由看门狗盯防它退出
       } else {
         serverPort = await getFreePort();
         await startServer(serverPort);
@@ -571,6 +605,7 @@ if (!gotLock) {
     createWindow();
     createTray();
     setupShellAutoUpdate();
+    startWatchdog();
     console.log(`[pi-desktop] 服务就绪: http://${APP_URL_HOST}:${serverPort}`);
 
     // 3. 窗口出来后后台顺带更新全局的 pi / pi-web (cmd 用的), 失败就下次
@@ -579,6 +614,7 @@ if (!gotLock) {
 
   app.on("before-quit", (e) => {
     quitting = true;
+    if (watchdog) clearInterval(watchdog);
     stopServer();
     // 退出时检查内核更新: 此刻服务已停无文件锁; 有新版就静默更新完再真正退出
     if (!quitUpdateDone && fs.existsSync(kernelBin())) {
