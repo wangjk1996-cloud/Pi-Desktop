@@ -1,9 +1,12 @@
 // Pi Web 桌面客户端 —— Electron 主进程
 // 职责:
-//   1. 内核自更新: 后台静默把 pi / pi-web 更新到官方最新版(npm 镜像源)
-//   2. 拉起 pi-web 服务(用 Electron 内置 Node 运行时, 不依赖本机 Node)
-//   3. 桌面体验: 独立窗口 / 托盘驻留 / 单实例 / 外部链接走系统浏览器
-//   4. 壳自更新: electron-updater 从 GitHub Releases 检查下载
+//   1. 内核: pi-web 私有副本, 首次运行自动下载; 每次退出应用时检查官方新版,
+//      有新版则静默更新(此时服务已停, 无文件锁), 下次启动自动生效
+//   2. 顺带更新: 本机全局 npm 里的 pi / pi-web(cmd 用的那两个)在启动后后台更新,
+//      被占用更新失败就下次再试, 不影响应用本身
+//   3. 服务: 用 Electron 内置 Node 运行时起 pi-web, 不依赖本机 Node.js
+//   4. 桌面体验: 独立窗口 / 托盘驻留 / 单实例 / 外部链接走系统浏览器
+//   5. 壳自更新: electron-updater 从 GitHub Releases 检查下载
 "use strict";
 
 const { app, BrowserWindow, Tray, Menu, dialog, shell } = require("electron");
@@ -18,26 +21,29 @@ const APP_URL_HOST = "127.0.0.1";
 const NPM_REGISTRY = "https://registry.npmmirror.com";
 const PI_WEB_PKG = "@agegr/pi-web";
 const PI_AGENT_PKG = "@earendil-works/pi-coding-agent";
-const KERNEL_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000; // 内核更新检查最小间隔
+const GLOBAL_TOOLS_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000; // 全局工具更新检查最小间隔
+const QUIT_UPDATE_TIMEOUT_MS = 3 * 60 * 1000; // 退出时内核更新最长耗时
 
 // ---------------------------------------------------------------------------
 // 路径与状态
 // ---------------------------------------------------------------------------
-// 内核优先用本机全局 npm 目录(与 cmd 里的 pi/pi-web 共享同一份, 更新一处处处新);
-// 全局不存在时用应用私有目录兜底(应对本机没有/坏了 Node 环境的情况)
+function privatePrefix() {
+  return path.join(app.getPath("userData"), "kernel");
+}
+function kernelBin() {
+  return path.join(privatePrefix(), "node_modules", "@agegr", "pi-web", "bin", "pi-web.js");
+}
+function kernelPkgJson() {
+  return path.join(privatePrefix(), "node_modules", "@agegr", "pi-web", "package.json");
+}
 function globalPrefix() {
   return path.join(process.env.APPDATA || "", "npm");
 }
-function privatePrefix() {
-  return path.join(app.getPath("userData"), "packages");
+function globalHas(pkgName) {
+  return fs.existsSync(path.join(globalPrefix(), "node_modules", ...pkgName.split("/")));
 }
-function kernelBin(prefix) {
-  return path.join(prefix, "node_modules", "@agegr", "pi-web", "bin", "pi-web.js");
-}
-function npmCliJs() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "npm", "bin", "npm-cli.js")
-    : path.join(__dirname, "vendor", "npm", "bin", "npm-cli.js");
+function npmRuntimeCli() {
+  return path.join(app.getPath("userData"), "npm-runtime", "npm", "bin", "npm-cli.js");
 }
 function logFile() {
   return path.join(app.getPath("userData"), "pi-web-server.log");
@@ -54,6 +60,7 @@ let tray = null;
 let serverProcess = null;
 let serverPort = DEFAULT_PORT;
 let quitting = false;
+let quitUpdateDone = false;
 
 function appendLog(file, text) {
   try {
@@ -138,19 +145,43 @@ function waitForServer(port, timeoutMs = 40000) {
 }
 
 // ---------------------------------------------------------------------------
-// 内核: 定位 / 首次安装 / 后台自更新
+// 内置 npm 运行时
+// 打包版以 tar.gz 随应用携带(electron-builder 会过滤裸目录里的 node_modules,
+// 只能带压缩包), 首次需要时解压到用户数据目录, 之后复用
 // ---------------------------------------------------------------------------
-function findKernel() {
-  const globalBin = kernelBin(globalPrefix());
-  if (fs.existsSync(globalBin)) return { bin: globalBin, prefix: globalPrefix(), global: true };
-  const privateBin = kernelBin(privatePrefix());
-  if (fs.existsSync(privateBin)) return { bin: privateBin, prefix: privatePrefix(), global: false };
-  return null;
+function ensureNpmRuntime() {
+  if (!app.isPackaged) {
+    return Promise.resolve(path.join(__dirname, "vendor", "npm", "bin", "npm-cli.js"));
+  }
+  const cli = npmRuntimeCli();
+  if (fs.existsSync(cli)) return Promise.resolve(cli);
+  const tarFile = path.join(process.resourcesPath, "npm-runtime.tar.gz");
+  const dest = path.join(app.getPath("userData"), "npm-runtime");
+  fs.mkdirSync(dest, { recursive: true });
+  appendLog(updateLogFile(), `${new Date().toISOString()} 解压内置 npm 运行时...\n`);
+  return new Promise((resolve, reject) => {
+    // 用系统 tar 的绝对路径, 避免 PATH 里其他 tar(如 Git Bash 的 GNU tar)
+    // 把 "C:\..." 误认为远程主机地址
+    const tarExe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
+    const child = spawn(tarExe, ["-xzf", tarFile, "-C", dest], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      if (code === 0 && fs.existsSync(cli)) resolve(cli);
+      else reject(new Error(`内置 npm 运行时解压失败 (code=${code})`));
+    });
+  });
 }
 
-function npmInstall(prefix, packages, useGlobalFlag) {
+// ---------------------------------------------------------------------------
+// npm 操作 (全部经内置运行时, 与本机 Node 无关)
+// ---------------------------------------------------------------------------
+async function npmInstall(prefix, packages, useGlobalFlag) {
+  const cli = await ensureNpmRuntime();
   return new Promise((resolve) => {
-    const args = [npmCliJs(), "install"];
+    const args = [cli, "install"];
     if (useGlobalFlag) args.push("-g");
     args.push(
       `--prefix`, prefix,
@@ -177,42 +208,57 @@ function npmInstall(prefix, packages, useGlobalFlag) {
   });
 }
 
-// 后台静默更新内核(pi + pi-web), 不影响当前运行, 下次启动生效
-async function backgroundKernelUpdate(kernel) {
-  try {
-    // 节流: 距上次检查不足间隔则跳过
-    let last = 0;
-    try {
-      last = JSON.parse(fs.readFileSync(stateFile(), "utf8")).lastKernelUpdate || 0;
-    } catch {
-      /* ignore */
-    }
-    if (Date.now() - last < KERNEL_UPDATE_INTERVAL_MS) return;
-    fs.writeFileSync(stateFile(), JSON.stringify({ lastKernelUpdate: Date.now() }));
-
-    // 内核所在处(全局或私有)更新 pi-web + pi
-    await npmInstall(
-      kernel.prefix,
-      [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
-      kernel.global
+async function npmLatestVersion(pkg) {
+  const cli = await ensureNpmRuntime();
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      [cli, "view", `${pkg}@latest`, "version", `--registry=${NPM_REGISTRY}`],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
     );
-    // 若内核在私有目录, 但全局也装着 pi/pi-web(cmd 在用), 顺带把全局也更新到最新
-    if (!kernel.global) {
-      const g = globalPrefix();
-      const hasGlobalPiWeb = fs.existsSync(kernelBin(g));
-      const hasGlobalPi = fs.existsSync(
-        path.join(g, "node_modules", "@earendil-works", "pi-coding-agent")
-      );
-      if (hasGlobalPiWeb || hasGlobalPi) {
-        await npmInstall(g, [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`], true);
-      }
+    let out = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.on("error", () => resolve(null));
+    child.on("exit", (code) => resolve(code === 0 ? out.trim() || null : null));
+  });
+}
+
+// pi-web 的 postinstall(prepare-terminal)可能被本机 npm 的脚本审批机制拦截,
+// 安装/更新后手动补跑一次, 保证终端组件就位
+function runPrepareTerminal(prefix) {
+  return new Promise((resolve) => {
+    const script = path.join(
+      prefix, "node_modules", "@agegr", "pi-web", "bin", "prepare-terminal.js"
+    );
+    if (!fs.existsSync(script)) {
+      resolve();
+      return;
     }
-  } catch (err) {
-    appendLog(updateLogFile(), `后台更新异常: ${err && err.message}\n`);
+    appendLog(updateLogFile(), `${new Date().toISOString()} 运行 prepare-terminal\n`);
+    const child = spawn(process.execPath, [script], {
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.on("data", (d) => appendLog(updateLogFile(), d.toString()));
+    child.stderr.on("data", (d) => appendLog(updateLogFile(), d.toString()));
+    child.on("error", () => resolve());
+    child.on("exit", () => resolve());
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 内核: 首次安装 / 退出时更新
+// ---------------------------------------------------------------------------
+function kernelVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(kernelPkgJson(), "utf8")).version || null;
+  } catch {
+    return null;
   }
 }
 
-// 首次运行: 没有任何内核 -> 先显示进度窗口, 下载内核到私有目录
+// 首次运行: 私有内核不存在 -> 显示进度窗口, 下载 pi-web
 async function firstRunInstall() {
   const win = new BrowserWindow({
     width: 460,
@@ -234,22 +280,56 @@ async function firstRunInstall() {
         </body>`
       )
     );
-  const ok = await npmInstall(
-    privatePrefix(),
-    [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
-    false
-  );
+  const ok = await npmInstall(privatePrefix(), [`${PI_WEB_PKG}@latest`], false);
+  if (ok) await runPrepareTerminal(privatePrefix());
   try {
     win.destroy();
   } catch {
     /* ignore */
   }
-  if (!ok || !fs.existsSync(kernelBin(privatePrefix()))) {
-    throw new Error(
-      "首次运行组件下载失败, 请检查网络后重试。\n日志: " + updateLogFile()
-    );
+  if (!ok || !fs.existsSync(kernelBin())) {
+    throw new Error("首次运行组件下载失败, 请检查网络后重试。\n日志: " + updateLogFile());
   }
-  return { bin: kernelBin(privatePrefix()), prefix: privatePrefix(), global: false };
+}
+
+// 退出时更新内核: 此刻服务已停, 文件无锁, 安静替换
+async function updateKernelOnQuit() {
+  try {
+    const cur = kernelVersion();
+    const latest = await npmLatestVersion(PI_WEB_PKG);
+    appendLog(updateLogFile(), `${new Date().toISOString()} 退出检查: 当前=${cur} 最新=${latest}\n`);
+    if (!latest || latest === cur) return;
+    appendLog(updateLogFile(), `发现新版本 ${latest}, 退出前更新内核...\n`);
+    const ok = await npmInstall(privatePrefix(), [`${PI_WEB_PKG}@latest`], false);
+    if (ok) await runPrepareTerminal(privatePrefix());
+  } catch (err) {
+    appendLog(updateLogFile(), `退出更新异常(忽略): ${err && err.message}\n`);
+  }
+}
+
+// 启动后后台更新本机全局 npm 里的 pi / pi-web(cmd 用的两个工具)
+// 被占用(EBUSY)或断网就下次再试, 永远不影响应用本身
+async function backgroundGlobalToolsUpdate() {
+  try {
+    if (!globalHas("@agegr/pi-web") && !globalHas("@earendil-works/pi-coding-agent")) return;
+    let last = 0;
+    try {
+      last = JSON.parse(fs.readFileSync(stateFile(), "utf8")).lastGlobalToolsUpdate || 0;
+    } catch {
+      /* ignore */
+    }
+    if (Date.now() - last < GLOBAL_TOOLS_UPDATE_INTERVAL_MS) return;
+    fs.writeFileSync(stateFile(), JSON.stringify({ lastGlobalToolsUpdate: Date.now() }));
+
+    const ok = await npmInstall(
+      globalPrefix(),
+      [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
+      true
+    );
+    if (ok) await runPrepareTerminal(globalPrefix());
+  } catch (err) {
+    appendLog(updateLogFile(), `全局工具更新异常(忽略): ${err && err.message}\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -278,10 +358,11 @@ function stopServer() {
   }, 1500);
 }
 
-function startServer(bin, cwd, port) {
+function startServer(port) {
   return new Promise((resolve, reject) => {
+    const bin = kernelBin();
     if (!fs.existsSync(bin)) {
-      reject(new Error(`未找到 pi-web 服务入口: ${bin}`));
+      reject(new Error(`未找到 pi-web 内核: ${bin}`));
       return;
     }
     appendLog(logFile(), `\n===== ${new Date().toISOString()} 启动服务 (port=${port}) =====\n`);
@@ -292,7 +373,7 @@ function startServer(bin, cwd, port) {
       process.execPath,
       [bin, "--no-open", "-p", String(port)],
       {
-        cwd,
+        cwd: privatePrefix(),
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -320,10 +401,9 @@ function startServer(bin, cwd, port) {
 // 窗口 / 托盘
 // ---------------------------------------------------------------------------
 function appIcon() {
-  const p = app.isPackaged
+  return app.isPackaged
     ? path.join(process.resourcesPath, "icon.ico")
     : path.join(__dirname, "build", "icon.ico");
-  return p;
 }
 
 function createWindow() {
@@ -432,6 +512,7 @@ function setupShellAutoUpdate() {
       if (r === 0) {
         quitting = true;
         stopServer();
+        quitUpdateDone = true;
         autoUpdater.quitAndInstall();
       }
     });
@@ -461,19 +542,18 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     app.setAppUserModelId("com.github.wangjk1996-cloud.piweb");
     try {
-      // 1. 定位内核; 首次运行则先下载
-      let kernel = findKernel();
-      if (!kernel) kernel = await firstRunInstall();
+      // 1. 首次运行: 下载私有内核(一次性)
+      if (!fs.existsSync(kernelBin())) await firstRunInstall();
 
       // 2. 端口策略: 默认端口空闲则启动服务; 已有 pi-web 在跑则直接复用; 否则换空闲端口
       if (await isPortFree(DEFAULT_PORT)) {
         serverPort = DEFAULT_PORT;
-        await startServer(kernel.bin, path.dirname(path.dirname(path.dirname(path.dirname(kernel.bin)))), serverPort);
+        await startServer(serverPort);
       } else if (await portResponds(DEFAULT_PORT)) {
         serverPort = DEFAULT_PORT;
       } else {
         serverPort = await getFreePort();
-        await startServer(kernel.bin, path.dirname(path.dirname(path.dirname(path.dirname(kernel.bin)))), serverPort);
+        await startServer(serverPort);
       }
     } catch (err) {
       dialog.showErrorBox("Pi Web 启动失败", String((err && err.message) || err));
@@ -486,14 +566,23 @@ if (!gotLock) {
     setupShellAutoUpdate();
     console.log(`[pi-web-app] 服务就绪: http://${APP_URL_HOST}:${serverPort}`);
 
-    // 3. 窗口出来后再后台静默更新内核, 不拖慢启动
-    const kernel = findKernel();
-    if (kernel) setTimeout(() => backgroundKernelUpdate(kernel), 5000);
+    // 3. 窗口出来后后台顺带更新全局的 pi / pi-web (cmd 用的), 失败就下次
+    setTimeout(() => backgroundGlobalToolsUpdate(), 8000);
   });
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (e) => {
     quitting = true;
     stopServer();
+    // 退出时检查内核更新: 此刻服务已停无文件锁; 有新版就静默更新完再真正退出
+    if (!quitUpdateDone && fs.existsSync(kernelBin())) {
+      quitUpdateDone = true;
+      e.preventDefault();
+      const timer = setTimeout(() => app.quit(), QUIT_UPDATE_TIMEOUT_MS);
+      updateKernelOnQuit().finally(() => {
+        clearTimeout(timer);
+        app.quit();
+      });
+    }
   });
 
   app.on("window-all-closed", () => {

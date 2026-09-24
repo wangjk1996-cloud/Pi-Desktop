@@ -31,11 +31,8 @@
     ],
     "extraResources": [
       {
-        "from": "vendor/npm",
-        "to": "npm",
-        "filter": [
-          "**/*"
-        ]
+        "from": "vendor/npm-runtime.tar.gz",
+        "to": "npm-runtime.tar.gz"
       },
       {
         "from": "build/icon.ico",
