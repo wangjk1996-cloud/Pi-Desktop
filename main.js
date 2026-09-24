@@ -489,12 +489,17 @@ html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#101010}
 #add:hover{background:rgba(255,255,255,.12)}
 #add:disabled{opacity:.3;cursor:default}
 #tabs{order:1;display:flex;align-items:center;gap:6px;overflow:hidden}
-.tab{-webkit-app-region:no-drag;display:flex;align-items:center;gap:6px;max-width:180px;
-  padding:5px 8px 5px 12px;border-radius:8px;background:#1c1c22;color:#9aa4b2;cursor:pointer;white-space:nowrap}
+.tab{-webkit-app-region:no-drag;display:flex;align-items:center;gap:7px;width:150px;min-width:150px;
+  padding:5px 8px;border-radius:8px;background:#1c1c22;color:#9aa4b2;cursor:pointer;white-space:nowrap;box-sizing:border-box}
 .tab.active{background:#2c2c34;color:#ffffff}
-.tab .label{overflow:hidden;text-overflow:ellipsis}
+.tab .label{flex:1;overflow:hidden;text-overflow:ellipsis}
 .tab .x{border:none;background:transparent;color:inherit;font-size:12px;cursor:pointer;border-radius:4px;padding:0 4px;opacity:.6;line-height:1}
 .tab .x:hover{background:rgba(255,255,255,.15);opacity:1}
+.dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:#6b7280}
+.dot.unread{background:#3b82f6}
+.dot.running{width:10px;height:10px;min-width:10px;background:transparent;
+  border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div id="bar"><div id="tabs"></div><button id="add" title="新建标签页">+</button></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -516,7 +521,11 @@ function toHexColor(rgb) {
 // 单个主窗口 + 顶部标签条(浏览器式标签页); 每个标签一个 pi-web 内容视图
 function pushTabState() {
   if (!stripView || stripView.webContents.isDestroyed()) return;
-  const list = [...tabs.values()].map((t) => ({ id: t.id, title: t.project }));
+  const list = [...tabs.values()].map((t) => ({
+    id: t.id,
+    title: t.project,
+    status: t.running ? "running" : t.unread ? "unread" : "idle",
+  }));
   stripView.webContents.send("app:tabs", {
     tabs: list,
     activeId: activeTabId,
@@ -546,6 +555,7 @@ function switchTab(id) {
   }
   activeTabId = id;
   const t = tabs.get(id);
+  t.unread = false; // 切到该标签即视为已读
   try {
     mainWindow.contentView.addChildView(t.content);
   } catch {
@@ -570,6 +580,8 @@ function wireContentEvents(entry) {
           ? `Pi Desktop - ${entry.project} | Powered by Pi`
           : "Pi Desktop | Powered by Pi"
       );
+    } else {
+      entry.unread = true; // 后台标签有动态, 标记未读
     }
     pushTabState();
   });
@@ -820,6 +832,37 @@ function startWatchdog() {
   }, 5000);
 }
 
+// 标签状态轮询: 运行中(页面出现旋转指示/停止按钮) -> 旋转圈;
+// 后台标签从运行转为空闲 -> 蓝点(已完成未读); 其余 -> 灰点
+let statusTimer = null;
+function startStatusPoller() {
+  statusTimer = setInterval(async () => {
+    if (quitting) return;
+    let changed = false;
+    for (const entry of tabs.values()) {
+      if (entry.content.webContents.isDestroyed()) continue;
+      try {
+        const running = await entry.content.webContents.executeJavaScript(
+          `(() => {
+            if (document.querySelector('[class*="animate-spin"]')) return true;
+            const bs = [...document.querySelectorAll("button")];
+            return bs.some((b) => /^(stop|停止)$/i.test((b.textContent || "").trim()));
+          })()`
+        );
+        const v = !!running;
+        if (v !== !!entry.running) {
+          if (entry.running && !v && entry.id !== activeTabId) entry.unread = true;
+          entry.running = v;
+          changed = true;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (changed) pushTabState();
+  }, 3000);
+}
+
 // ---------------------------------------------------------------------------
 // 应用生命周期
 // ---------------------------------------------------------------------------
@@ -862,6 +905,7 @@ if (!gotLock) {
     createTray();
     setupShellAutoUpdate();
     startWatchdog();
+    startStatusPoller();
     console.log(`[pi-desktop] 服务就绪: http://${APP_URL_HOST}:${serverPort}`);
 
     // 3. 窗口出来后后台顺带更新全局的 pi / pi-web (cmd 用的), 失败就下次
@@ -871,6 +915,7 @@ if (!gotLock) {
   app.on("before-quit", (e) => {
     quitting = true;
     if (watchdog) clearInterval(watchdog);
+    if (statusTimer) clearInterval(statusTimer);
     // 退出时检查内核更新: 先等服务真正退出(无文件锁), 有新版则静默更新完再退出
     if (!quitUpdateDone && fs.existsSync(kernelBin())) {
       quitUpdateDone = true;

@@ -14,6 +14,10 @@ window.addEventListener("DOMContentLoaded", () => {
       const d = document.createElement("div");
       d.className = "tab" + (t.id === state.activeId ? " active" : "");
 
+      const dot = document.createElement("span");
+      dot.className = "dot" + (t.status === "running" ? " running" : t.status === "unread" ? " unread" : "");
+      d.appendChild(dot);
+
       const label = document.createElement("span");
       label.className = "label";
       label.textContent = t.title || "首页";
