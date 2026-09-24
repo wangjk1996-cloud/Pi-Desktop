@@ -452,7 +452,10 @@ function createWindow() {
   });
   mainWindow.on("page-title-updated", (e, title) => {
     e.preventDefault();
-    mainWindow.setTitle(`Pi Desktop — ${title}`);
+    const base = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
+    mainWindow.setTitle(
+      base ? `Pi Desktop — ${base} — Powered by Pi Web` : "Pi Desktop — Powered by Pi Web"
+    );
   });
 }
 
@@ -543,6 +546,8 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     app.setAppUserModelId("com.github.wangjk1996-cloud.pidesktop");
+    // 移除默认菜单栏(否则 Alt/Ctrl 组合键会唤出)
+    Menu.setApplicationMenu(null);
     try {
       // 1. 首次运行: 下载私有内核(一次性)
       if (!fs.existsSync(kernelBin())) await firstRunInstall();
