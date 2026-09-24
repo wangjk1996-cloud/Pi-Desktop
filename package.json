@@ -1,7 +1,7 @@
 {
   "name": "pi-web-app",
-  "version": "1.0.0",
-  "description": "Pi Web 桌面客户端 — pi coding agent 的本地桌面端, 内核(pi/pi-web)自动更新",
+  "version": "1.1.0",
+  "description": "Pi Desktop — pi coding agent 的桌面客户端, 内核(pi/pi-web)自动更新",
   "author": "wangjk1996-cloud",
   "license": "MIT",
   "private": true,
@@ -20,7 +20,7 @@
   },
   "build": {
     "appId": "com.github.wangjk1996-cloud.piweb",
-    "productName": "Pi Web",
+    "productName": "Pi Desktop",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -49,8 +49,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Pi Web",
-      "artifactName": "PiWeb-${version}-setup.exe"
+      "shortcutName": "Pi Desktop",
+      "artifactName": "PiDesktop-${version}-setup.exe"
     },
     "publish": [
       {

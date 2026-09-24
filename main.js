@@ -1,4 +1,4 @@
-// Pi Web 桌面客户端 —— Electron 主进程
+// Pi Desktop —— Electron 主进程
 // 职责:
 //   1. 内核: pi-web 私有副本, 首次运行自动下载; 每次退出应用时检查官方新版,
 //      有新版则静默更新(此时服务已停, 无文件锁), 下次启动自动生效
@@ -46,10 +46,10 @@ function npmRuntimeCli() {
   return path.join(app.getPath("userData"), "npm-runtime", "npm", "bin", "npm-cli.js");
 }
 function logFile() {
-  return path.join(app.getPath("userData"), "pi-web-server.log");
+  return path.join(app.getPath("userData"), "pi-desktop-server.log");
 }
 function updateLogFile() {
-  return path.join(app.getPath("userData"), "kernel-update.log");
+  return path.join(app.getPath("userData"), "update.log");
 }
 function stateFile() {
   return path.join(app.getPath("userData"), "update-state.json");
@@ -258,7 +258,7 @@ function kernelVersion() {
   }
 }
 
-// 首次运行: 私有内核不存在 -> 显示进度窗口, 下载 pi-web
+// 首次运行: 私有内核不存在 -> 显示初始化窗口, 下载 pi-web
 async function firstRunInstall() {
   const win = new BrowserWindow({
     width: 460,
@@ -267,16 +267,16 @@ async function firstRunInstall() {
     maximizable: false,
     minimizable: false,
     autoHideMenuBar: true,
-    title: "Pi Web — 首次运行",
+    title: "Pi Desktop",
     backgroundColor: "#0b1220",
   });
   win.loadURL(
     "data:text/html;charset=utf-8," +
       encodeURIComponent(
         `<body style="margin:0;background:#0b1220;color:#dbe4f0;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh">
-          <h2 style="margin:0 0 12px">Pi Web 首次运行</h2>
-          <p style="margin:0;color:#8fa3bf">正在下载必需组件, 请保持联网…</p>
-          <p style="color:#5b6b84;font-size:12px">仅此一次, 之后启动无需等待</p>
+          <h2 style="margin:0 0 12px">Pi Desktop</h2>
+          <p style="margin:0;color:#8fa3bf">正在初始化必要组件，请保持网络连接。</p>
+          <p style="color:#5b6b84;font-size:12px">此过程仅在首次运行时执行。</p>
         </body>`
       )
     );
@@ -288,7 +288,9 @@ async function firstRunInstall() {
     /* ignore */
   }
   if (!ok || !fs.existsSync(kernelBin())) {
-    throw new Error("首次运行组件下载失败, 请检查网络后重试。\n日志: " + updateLogFile());
+    throw new Error(
+      "初始化失败：组件下载未完成，请检查网络连接后重试。\n日志文件：" + updateLogFile()
+    );
   }
 }
 
@@ -362,7 +364,7 @@ function startServer(port) {
   return new Promise((resolve, reject) => {
     const bin = kernelBin();
     if (!fs.existsSync(bin)) {
-      reject(new Error(`未找到 pi-web 内核: ${bin}`));
+      reject(new Error(`未找到服务组件：${bin}`));
       return;
     }
     appendLog(logFile(), `\n===== ${new Date().toISOString()} 启动服务 (port=${port}) =====\n`);
@@ -381,14 +383,14 @@ function startServer(port) {
     );
     serverProcess.stdout.on("data", (d) => appendLog(logFile(), d.toString()));
     serverProcess.stderr.on("data", (d) => appendLog(logFile(), d.toString()));
-    serverProcess.on("error", (err) => reject(new Error(`服务进程启动失败: ${err.message}`)));
+    serverProcess.on("error", (err) => reject(new Error(`服务进程启动失败：${err.message}`)));
     serverProcess.on("exit", (code, signal) => {
       appendLog(logFile(), `===== ${new Date().toISOString()} 服务退出 code=${code} signal=${signal} =====\n`);
       serverProcess = null;
       if (!quitting && mainWindow && !mainWindow.isDestroyed()) {
         dialog.showErrorBox(
-          "Pi Web 服务异常退出",
-          `pi-web 服务进程已退出 (code=${code})。\n日志: ${logFile()}`
+          "服务异常终止",
+          `服务进程意外退出（代码：${code}）。\n日志文件：${logFile()}`
         );
       }
     });
@@ -412,7 +414,7 @@ function createWindow() {
     height: 820,
     minWidth: 940,
     minHeight: 600,
-    title: "Pi Web",
+    title: "Pi Desktop",
     icon: appIcon(),
     autoHideMenuBar: true,
     backgroundColor: "#0b1220",
@@ -450,17 +452,17 @@ function createWindow() {
   });
   mainWindow.on("page-title-updated", (e, title) => {
     e.preventDefault();
-    mainWindow.setTitle(`Pi Web — ${title}`);
+    mainWindow.setTitle(`Pi Desktop — ${title}`);
   });
 }
 
 function createTray() {
   tray = new Tray(appIcon());
-  tray.setToolTip("Pi Web");
+  tray.setToolTip("Pi Desktop");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
-        label: "打开 Pi Web",
+        label: "打开 Pi Desktop",
         click: () => {
           if (!mainWindow || mainWindow.isDestroyed()) createWindow();
           else {
@@ -502,10 +504,10 @@ function setupShellAutoUpdate() {
     autoUpdater.on("update-downloaded", (info) => {
       const r = dialog.showMessageBoxSync({
         type: "info",
-        title: "Pi Web 更新",
+        title: "软件更新",
         message: `新版本 ${info.version} 已下载完成`,
-        detail: "重启应用即可生效。",
-        buttons: ["立即重启", "稍后"],
+        detail: "重新启动应用程序以完成更新。",
+        buttons: ["立即重新启动", "稍后"],
         defaultId: 0,
         cancelId: 1,
       });
@@ -540,7 +542,7 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
-    app.setAppUserModelId("com.github.wangjk1996-cloud.piweb");
+    app.setAppUserModelId("com.github.wangjk1996-cloud.pidesktop");
     try {
       // 1. 首次运行: 下载私有内核(一次性)
       if (!fs.existsSync(kernelBin())) await firstRunInstall();
@@ -556,7 +558,7 @@ if (!gotLock) {
         await startServer(serverPort);
       }
     } catch (err) {
-      dialog.showErrorBox("Pi Web 启动失败", String((err && err.message) || err));
+      dialog.showErrorBox("启动失败", String((err && err.message) || err));
       app.exit(1);
       return;
     }
@@ -564,7 +566,7 @@ if (!gotLock) {
     createWindow();
     createTray();
     setupShellAutoUpdate();
-    console.log(`[pi-web-app] 服务就绪: http://${APP_URL_HOST}:${serverPort}`);
+    console.log(`[pi-desktop] 服务就绪: http://${APP_URL_HOST}:${serverPort}`);
 
     // 3. 窗口出来后后台顺带更新全局的 pi / pi-web (cmd 用的), 失败就下次
     setTimeout(() => backgroundGlobalToolsUpdate(), 8000);
