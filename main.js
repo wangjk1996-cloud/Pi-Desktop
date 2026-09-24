@@ -72,6 +72,19 @@ function appendLog(file, text) {
   }
 }
 
+// 日志超过 5MB 时只保留末尾 512KB, 防无限增长
+function trimLog(file) {
+  try {
+    const st = fs.statSync(file);
+    if (st.size > 5 * 1024 * 1024) {
+      const content = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(file, content.slice(-512 * 1024));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 端口工具
 // ---------------------------------------------------------------------------
@@ -282,7 +295,11 @@ async function firstRunInstall() {
         </body>`
       )
     );
-  const ok = await npmInstall(privatePrefix(), [`${PI_WEB_PKG}@latest`], false);
+  const ok = await npmInstall(
+    privatePrefix(),
+    [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
+    false
+  );
   if (ok) await runPrepareTerminal(privatePrefix());
   try {
     win.destroy();
@@ -304,7 +321,11 @@ async function updateKernelOnQuit() {
     appendLog(updateLogFile(), `${new Date().toISOString()} 退出检查: 当前=${cur} 最新=${latest}\n`);
     if (!latest || latest === cur) return;
     appendLog(updateLogFile(), `发现新版本 ${latest}, 退出前更新内核...\n`);
-    const ok = await npmInstall(privatePrefix(), [`${PI_WEB_PKG}@latest`], false);
+    const ok = await npmInstall(
+    privatePrefix(),
+    [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
+    false
+  );
     if (ok) await runPrepareTerminal(privatePrefix());
   } catch (err) {
     appendLog(updateLogFile(), `退出更新异常(忽略): ${err && err.message}\n`);
@@ -323,14 +344,17 @@ async function backgroundGlobalToolsUpdate() {
       /* ignore */
     }
     if (Date.now() - last < GLOBAL_TOOLS_UPDATE_INTERVAL_MS) return;
-    fs.writeFileSync(stateFile(), JSON.stringify({ lastGlobalToolsUpdate: Date.now() }));
 
+    // 成功后才记录时间, 失败(占用/断网)下次启动立即重试
     const ok = await npmInstall(
       globalPrefix(),
       [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
       true
     );
-    if (ok) await runPrepareTerminal(globalPrefix());
+    if (ok) {
+      await runPrepareTerminal(globalPrefix());
+      fs.writeFileSync(stateFile(), JSON.stringify({ lastGlobalToolsUpdate: Date.now() }));
+    }
   } catch (err) {
     appendLog(updateLogFile(), `全局工具更新异常(忽略): ${err && err.message}\n`);
   }
@@ -340,9 +364,14 @@ async function backgroundGlobalToolsUpdate() {
 // 服务生命周期
 // ---------------------------------------------------------------------------
 function stopServer() {
-  if (!serverProcess) return;
+  if (!serverProcess) return Promise.resolve();
   const child = serverProcess;
   serverProcess = null;
+  // 返回 Promise: 等服务真正退出(否则退出时更新内核会撞上文件锁)
+  const exited = new Promise((resolve) => {
+    child.once("exit", () => resolve());
+    setTimeout(resolve, 2500); // 兜底
+  });
   try {
     child.kill();
   } catch {
@@ -360,6 +389,7 @@ function stopServer() {
       /* ignore */
     }
   }, 1500);
+  return exited;
 }
 
 function startServer(port) {
@@ -465,7 +495,7 @@ function createWindow() {
     e.preventDefault();
     const base = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
     mainWindow.setTitle(
-      base ? `Pi Desktop - ${base} | Powered by Pi Web` : "Pi Desktop | Powered by Pi Web"
+      base ? `Pi Desktop - ${base} | Powered by Pi` : "Pi Desktop | Powered by Pi"
     );
   });
 }
@@ -581,6 +611,8 @@ if (!gotLock) {
     app.setAppUserModelId("com.github.wangjk1996-cloud.pidesktop");
     // 移除默认菜单栏(否则 Alt/Ctrl 组合键会唤出)
     Menu.setApplicationMenu(null);
+    trimLog(logFile());
+    trimLog(updateLogFile());
     try {
       // 1. 首次运行: 下载私有内核(一次性)
       if (!fs.existsSync(kernelBin())) await firstRunInstall();
@@ -615,16 +647,19 @@ if (!gotLock) {
   app.on("before-quit", (e) => {
     quitting = true;
     if (watchdog) clearInterval(watchdog);
-    stopServer();
-    // 退出时检查内核更新: 此刻服务已停无文件锁; 有新版就静默更新完再真正退出
+    // 退出时检查内核更新: 先等服务真正退出(无文件锁), 有新版则静默更新完再退出
     if (!quitUpdateDone && fs.existsSync(kernelBin())) {
       quitUpdateDone = true;
       e.preventDefault();
       const timer = setTimeout(() => app.quit(), QUIT_UPDATE_TIMEOUT_MS);
-      updateKernelOnQuit().finally(() => {
-        clearTimeout(timer);
-        app.quit();
-      });
+      stopServer()
+        .then(() => updateKernelOnQuit())
+        .finally(() => {
+          clearTimeout(timer);
+          app.quit();
+        });
+    } else {
+      stopServer();
     }
   });
 
