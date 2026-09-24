@@ -19,24 +19,24 @@ function Draw-LogoMaster([int]$size) {
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    $margin = [int]($size * 0.02)
+    $margin = 0
     $side = $size - $margin * 2
     $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(16, 16, 16))
     $bgPath = New-RoundedRectPath $margin $margin $side $side ($size * 0.23)
     $g.FillPath($brush, $bgPath)
 
     $s = [float]$size
-    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ($s * 0.095)
+    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ($s * 0.105)
     $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
     $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
     $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
 
-    $g.DrawLine($pen, $s * 0.30, $s * 0.30, $s * 0.70, $s * 0.30)
-    $g.DrawLine($pen, $s * 0.41, $s * 0.30, $s * 0.41, $s * 0.70)
+    $g.DrawLine($pen, $s * 0.27, $s * 0.28, $s * 0.73, $s * 0.28)
+    $g.DrawLine($pen, $s * 0.40, $s * 0.28, $s * 0.40, $s * 0.72)
 
-    $x1 = [float]($s * 0.59); $y0 = [float]($s * 0.30); $y1 = [float]($s * 0.54)
-    $x2 = [float]($s * 0.59); $y2 = [float]($s * 0.68)
-    $x3 = [float]($s * 0.70); $y3 = [float]($s * 0.73)
+    $x1 = [float]($s * 0.60); $y0 = [float]($s * 0.28); $y1 = [float]($s * 0.55)
+    $x2 = [float]($s * 0.60); $y2 = [float]($s * 0.70)
+    $x3 = [float]($s * 0.72); $y3 = [float]($s * 0.75)
     $leg = New-Object System.Drawing.Drawing2D.GraphicsPath
     $leg.AddLine($x1, $y0, $x1, $y1)
     $p1 = New-Object System.Drawing.PointF($x1, $y1)
