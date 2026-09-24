@@ -90,11 +90,14 @@ let quitUpdateDone = false;
 let reusedExternal = false; // 当前复用的是外部 pi-web 服务(可能随时退出)
 let watchdog = null;
 
-// 多窗口: id -> { id, win, strip, content, url, project }
-const MAX_WINDOWS = 5;
-const STRIP_HEIGHT = 36;
-const appWindows = new Map();
-let winSeq = 0;
+// 标签页: id -> { id, content, url, project }
+const MAX_TABS = 5;
+const STRIP_HEIGHT = 40;
+const tabs = new Map();
+let tabSeq = 0;
+let activeTabId = null;
+let mainWindow = null;
+let stripView = null;
 
 function appendLog(file, text) {
   try {
@@ -479,14 +482,20 @@ function homeUrl() {
 function stripHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#101010}
-#bar{display:flex;align-items:center;height:${STRIP_HEIGHT}px;padding:0 150px 0 10px;
+#bar{display:flex;align-items:center;height:${STRIP_HEIGHT}px;padding:0 150px 0 8px;
   -webkit-app-region:drag;color:#dbe4f0;font:12px "Segoe UI",sans-serif;user-select:none}
-#add{-webkit-app-region:no-drag;width:26px;height:26px;min-width:26px;border:none;border-radius:6px;
-  background:transparent;color:#dbe4f0;font-size:17px;cursor:pointer;line-height:1}
+#add{-webkit-app-region:no-drag;order:2;width:26px;height:26px;min-width:26px;border:none;border-radius:6px;
+  background:transparent;color:#dbe4f0;font-size:16px;cursor:pointer;line-height:1}
 #add:hover{background:rgba(255,255,255,.12)}
 #add:disabled{opacity:.3;cursor:default}
-#title{margin-left:8px;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-</style></head><body><div id="bar"><button id="add" title="新建窗口">+</button><span id="title">Pi Desktop</span></div></body></html>`;
+#tabs{order:1;display:flex;align-items:center;gap:6px;overflow:hidden}
+.tab{-webkit-app-region:no-drag;display:flex;align-items:center;gap:6px;max-width:180px;
+  padding:5px 8px 5px 12px;border-radius:8px;background:#1c1c22;color:#9aa4b2;cursor:pointer;white-space:nowrap}
+.tab.active{background:#2c2c34;color:#ffffff}
+.tab .label{overflow:hidden;text-overflow:ellipsis}
+.tab .x{border:none;background:transparent;color:inherit;font-size:12px;cursor:pointer;border-radius:4px;padding:0 4px;opacity:.6;line-height:1}
+.tab .x:hover{background:rgba(255,255,255,.15);opacity:1}
+</style></head><body><div id="bar"><div id="tabs"></div><button id="add" title="新建标签页">+</button></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -504,71 +513,60 @@ function toHexColor(rgb) {
   return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
 }
 
-// 每个窗口 = 顶部自绘标题条(拖动区 + 「+」新窗口按钮 + 项目名) + pi-web 内容视图
-function createAppWindow(url) {
-  if (appWindows.size >= MAX_WINDOWS) return null;
-  const id = ++winSeq;
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    minWidth: 940,
-    minHeight: 600,
-    title: "Pi Desktop",
-    icon: appIcon(),
-    backgroundColor: "#0b1220",
-    titleBarStyle: "hidden",
-    titleBarOverlay: { color: "#101010", symbolColor: "#dbe4f0", height: STRIP_HEIGHT },
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+// 单个主窗口 + 顶部标签条(浏览器式标签页); 每个标签一个 pi-web 内容视图
+function pushTabState() {
+  if (!stripView || stripView.webContents.isDestroyed()) return;
+  const list = [...tabs.values()].map((t) => ({ id: t.id, title: t.project }));
+  stripView.webContents.send("app:tabs", {
+    tabs: list,
+    activeId: activeTabId,
+    canNew: tabs.size < MAX_TABS,
   });
-  // 新窗口层叠偏移, 不与已有窗口完全重叠
-  if (appWindows.size) {
-    const [x, y] = win.getPosition();
-    win.setPosition(x + appWindows.size * 28, y + appWindows.size * 28);
+  rebuildTray();
+}
+
+function layoutWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const [w, h] = mainWindow.getContentSize();
+  if (stripView) stripView.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
+  for (const t of tabs.values()) {
+    t.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
   }
+}
 
-  const strip = new WebContentsView({
-    webPreferences: {
-      preload: path.join(__dirname, "strip-preload.js"),
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
-  const content = new WebContentsView({
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
-  });
-  win.contentView.addChildView(strip);
-  win.contentView.addChildView(content);
+function switchTab(id) {
+  if (!tabs.has(id) || !mainWindow || mainWindow.isDestroyed()) return;
+  activeTabId = id;
+  for (const t of tabs.values()) t.content.setVisible(t.id === id);
+  const t = tabs.get(id);
+  mainWindow.setTitle(
+    t.project ? `Pi Desktop - ${t.project} | Powered by Pi` : "Pi Desktop | Powered by Pi"
+  );
+  pushTabState();
+}
 
-  const layout = () => {
-    const [w, h] = win.getContentSize();
-    strip.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
-    content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
-  };
-  layout();
-  win.on("resize", layout);
+function wireContentEvents(entry) {
+  const { content } = entry;
 
-  const entry = { id, win, strip, content, url: url || homeUrl(), project: "" };
-  appWindows.set(id, entry);
-
-  strip.webContents.loadURL(stripHtml());
-  content.webContents.loadURL(entry.url);
-
-  // 页面标题里的项目名 -> 标题条 / 任务栏标题 / 托盘项目列表
   content.webContents.on("page-title-updated", (e, title) => {
     e.preventDefault();
-    const base = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
-    entry.project = base;
-    const text = base ? `Pi Desktop - ${base} | Powered by Pi` : "Pi Desktop | Powered by Pi";
-    win.setTitle(text);
-    if (!strip.webContents.isDestroyed()) strip.webContents.send("app:title", text);
-    rebuildTray();
+    entry.project = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
+    if (entry.id === activeTabId) {
+      mainWindow.setTitle(
+        entry.project
+          ? `Pi Desktop - ${entry.project} | Powered by Pi`
+          : "Pi Desktop | Powered by Pi"
+      );
+    }
+    pushTabState();
   });
   content.webContents.on("did-navigate", (_e, navUrl) => {
     entry.url = navUrl;
   });
 
-  // 内容加载后同步标题条/原生按钮配色, 与 pi-web 顶栏协调
+  // 内容加载后同步标签条/原生按钮配色, 与 pi-web 顶栏协调
   content.webContents.on("did-finish-load", async () => {
+    if (entry.id !== activeTabId || !mainWindow || mainWindow.isDestroyed()) return;
     try {
       const bg = await content.webContents.executeJavaScript(
         `(() => { const el = document.querySelector("header") || document.body;
@@ -578,8 +576,10 @@ function createAppWindow(url) {
       const hex = toHexColor(bg);
       if (hex) {
         const fg = isLightColor(bg) ? "#1f2328" : "#dbe4f0";
-        win.setTitleBarOverlay({ color: hex, symbolColor: fg, height: STRIP_HEIGHT });
-        if (!strip.webContents.isDestroyed()) strip.webContents.send("app:bar-color", hex, fg);
+        mainWindow.setTitleBarOverlay({ color: hex, symbolColor: fg, height: STRIP_HEIGHT });
+        if (stripView && !stripView.webContents.isDestroyed()) {
+          stripView.webContents.send("app:bar-color", hex, fg);
+        }
       }
     } catch {
       /* ignore */
@@ -604,67 +604,126 @@ function createAppWindow(url) {
       if (/^https?:/i.test(navUrl)) shell.openExternal(navUrl);
     }
   });
+}
 
-  win.on("closed", () => {
-    appWindows.delete(id);
-    broadcastCanNew();
+function newTab(url) {
+  if (tabs.size >= MAX_TABS || !mainWindow || mainWindow.isDestroyed()) return;
+  const id = ++tabSeq;
+  const content = new WebContentsView({
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+  });
+  mainWindow.contentView.addChildView(content);
+  const entry = { id, content, url: url || homeUrl(), project: "" };
+  tabs.set(id, entry);
+  wireContentEvents(entry);
+  content.webContents.loadURL(entry.url);
+  layoutWindow();
+  switchTab(id);
+}
+
+function closeTab(id) {
+  const entry = tabs.get(id);
+  if (!entry || tabs.size <= 1 || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.contentView.removeChildView(entry.content);
+  entry.content.webContents.close();
+  tabs.delete(id);
+  if (activeTabId === id) switchTab([...tabs.keys()][tabs.size - 1]);
+  else pushTabState();
+}
+
+function createMainWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 940,
+    minHeight: 600,
+    title: "Pi Desktop",
+    icon: appIcon(),
+    backgroundColor: "#0b1220",
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#101010", symbolColor: "#dbe4f0", height: STRIP_HEIGHT },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+  });
+
+  stripView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, "strip-preload.js"),
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  mainWindow.contentView.addChildView(stripView);
+  stripView.webContents.loadURL(stripHtml());
+  stripView.webContents.on("did-finish-load", () => pushTabState());
+
+  layoutWindow();
+  mainWindow.on("resize", layoutWindow);
+
+  // 关窗 -> 托盘驻留, 标签页与服务都保留
+  mainWindow.on("close", (e) => {
+    if (!quitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+  mainWindow.on("closed", () => {
+    for (const t of tabs.values()) t.content.webContents.close();
+    tabs.clear();
+    activeTabId = null;
+    mainWindow = null;
+    stripView = null;
     rebuildTray();
   });
 
-  broadcastCanNew();
-  rebuildTray();
-  return entry;
+  newTab();
 }
 
-function focusWindow(id) {
-  const entry = appWindows.get(id);
-  if (!entry || entry.win.isDestroyed()) return;
-  if (entry.win.isMinimized()) entry.win.restore();
-  entry.win.show();
-  entry.win.focus();
-}
-
-function openWindowOrHome() {
-  if (appWindows.size === 0) createAppWindow();
-  else focusWindow([...appWindows.keys()][0]);
-}
-
-function broadcastCanNew() {
-  const ok = appWindows.size < MAX_WINDOWS;
-  for (const { strip } of appWindows.values()) {
-    if (!strip.webContents.isDestroyed()) strip.webContents.send("app:can-new", ok);
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createMainWindow();
+    return;
   }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 }
 
-// 「+」按钮(标题条)新开窗口, 上限 MAX_WINDOWS
-ipcMain.on("app:new-window", (e) => {
-  for (const { strip } of appWindows.values()) {
-    if (strip.webContents === e.sender) {
-      if (appWindows.size < MAX_WINDOWS) createAppWindow();
-      return;
-    }
-  }
+// 标签条按钮事件
+ipcMain.on("app:new-tab", (e) => {
+  if (stripView && e.sender === stripView.webContents && tabs.size < MAX_TABS) newTab();
+});
+ipcMain.on("app:switch-tab", (e, id) => {
+  if (stripView && e.sender === stripView.webContents) switchTab(id);
+});
+ipcMain.on("app:close-tab", (e, id) => {
+  if (stripView && e.sender === stripView.webContents) closeTab(id);
 });
 
 function createTray() {
   tray = new Tray(appIcon());
   tray.setToolTip("Pi Desktop");
-  tray.on("click", () => openWindowOrHome());
+  tray.on("click", () => showMainWindow());
   rebuildTray();
 }
 
-// 托盘菜单动态重建: 「已打开的项目」只列当前打开的窗口
+// 托盘菜单动态重建: 「已打开的项目」列出当前标签页
 function rebuildTray() {
   if (!tray) return;
   const items = [
-    { label: "打开 Pi Desktop", click: () => openWindowOrHome() },
+    { label: "打开 Pi Desktop", click: () => showMainWindow() },
     { label: "在浏览器中打开", click: () => shell.openExternal(homeUrl()) },
   ];
-  if (appWindows.size) {
+  if (tabs.size) {
     items.push({ type: "separator" });
     items.push({ label: "已打开的项目", enabled: false });
-    for (const entry of appWindows.values()) {
-      items.push({ label: entry.project || "首页", click: () => focusWindow(entry.id) });
+    for (const entry of tabs.values()) {
+      items.push({
+        label: entry.project || "首页",
+        click: () => {
+          showMainWindow();
+          switchTab(entry.id);
+        },
+      });
     }
   }
   items.push({ type: "separator" });
@@ -725,7 +784,7 @@ function startWatchdog() {
     try {
       serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
       await startServer(serverPort);
-      for (const entry of appWindows.values()) {
+      for (const entry of tabs.values()) {
         if (!entry.content.webContents.isDestroyed()) {
           entry.url = `http://${APP_URL_HOST}:${serverPort}`;
           entry.content.webContents.loadURL(entry.url);
@@ -745,7 +804,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    openWindowOrHome();
+    showMainWindow();
   });
 
   app.whenReady().then(async () => {
@@ -775,7 +834,7 @@ if (!gotLock) {
       return;
     }
 
-    createAppWindow();
+    createMainWindow();
     createTray();
     setupShellAutoUpdate();
     startWatchdog();
@@ -809,6 +868,6 @@ if (!gotLock) {
   });
 
   app.on("activate", () => {
-    openWindowOrHome();
+    showMainWindow();
   });
 }
