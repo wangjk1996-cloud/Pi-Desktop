@@ -454,7 +454,7 @@ function createWindow() {
     e.preventDefault();
     const base = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
     mainWindow.setTitle(
-      base ? `Pi Desktop - ${base} - Powered by Pi Web` : "Pi Desktop - Powered by Pi Web"
+      base ? `Pi Desktop - ${base} | Powered by Pi Web` : "Pi Desktop | Powered by Pi Web"
     );
   });
 }
