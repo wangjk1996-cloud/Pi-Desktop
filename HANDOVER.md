@@ -6,7 +6,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 
 - 仓库：https://github.com/wangjk1996-cloud/Pi-Desktop
 - 本地路径：`C:\Users\Leo\Documents\GitHub\Pi-Desktop`
-- 当前版本：v1.7.2
+- 当前版本：v1.7.3
 - 环境：Windows 11、Git Bash、Node 24、Electron 39、electron-builder 26
 
 ## 1. 架构（读代码前先看这个）

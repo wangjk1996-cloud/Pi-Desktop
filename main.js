@@ -534,7 +534,7 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .intro{font-size:14px;line-height:1.7;color:#9da6b5;margin:0}
 #browse{display:inline-flex;align-items:center;gap:8px;height:40px;margin-top:28px;padding:0 12px;
   border:1px solid transparent;border-radius:10px;background:#dce6f8;color:#1b2940;
-  box-shadow:inset 0 0 0 1px #c4d0e8;cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .12s,box-shadow .12s}
+  box-shadow:inset 0 0 0 1px #c4d0e8;cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .18s ease,box-shadow .18s ease}
 #browse:hover{background:#eef3fd;box-shadow:inset 0 0 0 1px #eef3fd}
 #browse:focus-visible,.project:focus-visible{outline:2px solid #8eafe8;outline-offset:2px}
 #browse svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -546,7 +546,8 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 #projects::-webkit-scrollbar{width:6px}
 #projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
 .project{display:flex;align-items:center;gap:15px;width:100%;min-height:90px;padding:10px 13px;margin-top:7px;
-  box-sizing:border-box;border:1px solid transparent;border-radius:10px;box-shadow:inset 0 0 0 1px #2a2e36;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
+  box-sizing:border-box;border:1px solid transparent;border-radius:10px;box-shadow:inset 0 0 0 1px #2a2e36;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit;
+  transition:background-color .18s ease,box-shadow .18s ease}
 .project:hover{background:#2b3039}
 .project.dragging{opacity:.45}
 .project.drop-before{box-shadow:inset 0 2px #8eafe8}
@@ -558,11 +559,12 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .name{font-size:15px;font-weight:700}.cwd{font-size:12px;color:#8f98a8;margin-top:5px}
 .count{flex:none;font-size:11px;color:#858e9d}
-.rename,.remove{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;padding:0;border:0;border-radius:8px;
-  background:transparent;color:#aeb7c5;cursor:pointer;opacity:.6}
-.remove{margin-left:-11px}
-.rename:hover,.rename:focus-visible,.remove:hover,.remove:focus-visible{background:#39404c;color:#fff;opacity:1;outline:none}
-.rename svg,.remove svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.actions{display:flex;align-items:center;gap:3px;flex:none}
+.rename,.remove{display:grid;place-items:center;width:29px;height:29px;padding:0;border:0;border-radius:8px;
+  background:transparent;color:#aeb8c8;cursor:pointer;transition:background-color .18s ease,color .18s ease,transform .18s ease}
+.rename:hover,.rename:focus-visible{background:#354055;color:#d0dfff;outline:none;transform:translateY(-1px)}
+.remove:hover,.remove:focus-visible{background:#43343a;color:#f0b9bc;outline:none;transform:translateY(-1px)}
+.rename svg,.remove svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .name-editor{min-width:0;width:min(100%,280px);height:27px;box-sizing:border-box;padding:2px 6px;margin:-3px 0;
   border:1px solid #8eafe8;border-radius:5px;outline:none;background:#171b22;color:#fff;font:700 15px "Segoe UI","Microsoft YaHei",sans-serif}
 .name-editor.invalid{border-color:#ef8888}
@@ -584,7 +586,7 @@ svg{shape-rendering:geometricPrecision}
 .tab{display:flex;align-items:center;gap:7px;flex:0 0 148px;width:148px;height:29px;
   padding:0 8px 0 10px;border:1px solid transparent;border-radius:9px;
   background:#22242a;color:#aeb4c0;cursor:pointer;white-space:nowrap;box-sizing:border-box;
-  transition:background .12s,border-color .12s}
+  transition:background-color .18s ease,color .18s ease,box-shadow .18s ease}
 .tab:hover{background:#2b2e36;color:#f0f2f6}
 .tab.active{background:#353944;box-shadow:inset 0 0 0 1px #4c5260;color:#fff}
 .tab:focus-visible,#add:focus-visible,.nav:focus-visible{outline:2px solid #7eaeff;outline-offset:-2px}
@@ -603,7 +605,8 @@ svg{shape-rendering:geometricPrecision}
 .dot.running{width:10px;height:10px;min-width:10px;background:transparent;
   border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
 #add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:9px;
-  background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0}
+  background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0;
+  transition:background-color .18s ease,color .18s ease}
 #add svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
 .nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;
   stroke-linecap:round;stroke-linejoin:round}
@@ -1004,7 +1007,8 @@ svg{shape-rendering:geometricPrecision}
 #list{flex:1;overflow-y:auto;scrollbar-width:none;padding:3px 7px 8px}
 #list::-webkit-scrollbar{display:none}
 .row{display:flex;align-items:center;gap:10px;width:100%;height:42px;padding:0 11px;border:0;
-  border-radius:9px;background:transparent;color:#dce1e9;text-align:left;cursor:pointer;font:inherit}
+  border-radius:9px;background:transparent;color:#dce1e9;text-align:left;cursor:pointer;font:inherit;
+  transition:background-color .18s ease,color .18s ease}
 .row:hover,.row:focus-visible{background:#30343d;outline:none}
 .row.active{background:#2e3440;color:#fff}
 .num{color:#7f8998;font-size:11px;width:18px;flex:0 0 18px}

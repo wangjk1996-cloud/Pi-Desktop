@@ -99,10 +99,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     lastProjectsSignature = signature;
     const scrollTop = list.scrollTop;
+    const oldPositions = new Map([...list.querySelectorAll(".project")].map((row) => [row.dataset.cwd, row.getBoundingClientRect().top]));
     list.replaceChildren();
-    document.getElementById("project-count").textContent = projects.length > 1
-      ? `${projects.length} 个 · 拖动排序`
-      : `${projects.length} 个`;
+    document.getElementById("project-count").textContent = `${projects.length} 个`;
     if (!projects.length) {
       const empty = document.createElement("div");
       empty.className = "empty";
@@ -113,6 +112,7 @@ window.addEventListener("DOMContentLoaded", () => {
     for (const project of projects) {
       const row = document.createElement("div");
       row.className = "project";
+      row.dataset.cwd = project.cwd;
       row.draggable = true;
       row.tabIndex = 0;
       row.setAttribute("role", "button");
@@ -144,8 +144,11 @@ window.addEventListener("DOMContentLoaded", () => {
       remove.title = "从最近项目移除（不会删除目录或会话）";
       remove.setAttribute("aria-label", `从最近项目移除 ${project.name}`);
       remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9 7V4.5h6V7m-8.5 0 .8 12h9.4l.8-12M10 10.5v5.5m4-5.5v5.5"/></svg>';
+      const actions = document.createElement("span");
+      actions.className = "actions";
+      actions.append(rename, remove);
       details.append(name, cwd);
-      row.append(grip, folder, details, count, rename, remove);
+      row.append(grip, folder, details, count, actions);
       rename.addEventListener("click", (event) => {
         event.stopPropagation();
         beginRename(project, name);
@@ -195,6 +198,17 @@ window.addEventListener("DOMContentLoaded", () => {
       list.appendChild(row);
     }
     list.scrollTop = scrollTop;
+    if (oldPositions.size && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      for (const row of list.querySelectorAll(".project")) {
+        const previousTop = oldPositions.get(row.dataset.cwd);
+        if (previousTop === undefined) continue;
+        const distance = previousTop - row.getBoundingClientRect().top;
+        if (Math.abs(distance) > 1) {
+          row.animate([{ transform: `translateY(${distance}px)` }, { transform: "translateY(0)" }],
+            { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
+        }
+      }
+    }
   }
   ipcRenderer.on("app:home-projects", (_e, projects) => renderProjects(projects));
   ipcRenderer.send("app:home-ready");
