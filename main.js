@@ -92,7 +92,7 @@ let watchdog = null;
 
 // 标签页: id -> { id, content, url, project, cwdBase, unread, running, lastSeen }
 const STRIP_HEIGHT = 40;
-const OVERFLOW_WIDTH = 280;
+const OVERFLOW_WIDTH = 224;
 const tabs = new Map();
 let tabSeq = 0;
 let activeTabId = null;
@@ -768,16 +768,8 @@ function newTab() {
     running: false,
     lastSeen: Date.now(),
   };
-  // 插在当前标签右侧(Chrome 行为)
-  if (activeTabId && tabs.has(activeTabId)) {
-    const entries = [...tabs.entries()];
-    const idx = entries.findIndex(([k]) => k === activeTabId);
-    entries.splice(idx + 1, 0, [id, entry]);
-    tabs.clear();
-    for (const [k, v] of entries) tabs.set(k, v);
-  } else {
-    tabs.set(id, entry);
-  }
+  // "+" 位于标签栏末尾，新标签也追加到末尾
+  tabs.set(id, entry);
   switchTab(id);
 }
 
