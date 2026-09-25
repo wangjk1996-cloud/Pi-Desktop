@@ -553,6 +553,8 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
   box-sizing:border-box;border:1px solid transparent;border-radius:10px;box-shadow:inset 0 0 0 1px #2a2e36;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit;
   transition:background-color .14s cubic-bezier(.25,1,.5,1)}
 .project:hover{background:#2b3039}
+.project.editing,.project.confirming{background:#2b3039}
+.project.opening{cursor:progress}
 .project.dragging{opacity:.45}
 .project.drop-before{box-shadow:inset 0 2px #8eafe8}
 .project.drop-after{box-shadow:inset 0 -2px #8eafe8}
@@ -562,6 +564,8 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .folder svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .name{font-size:15px;font-weight:700}.cwd{font-size:12px;color:#8f98a8;margin-top:5px}
+.project.confirming .name{color:#f0c6c9}
+.project.opening .cwd{color:#a9c4f1}
 .count{flex:none;font-size:11px;color:#858e9d}
 .actions{display:flex;align-items:center;gap:3px;flex:none}
 .rename,.remove{display:grid;place-items:center;width:29px;height:29px;padding:0;border:0;border-radius:8px;
@@ -573,9 +577,20 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .name-editor{min-width:0;width:min(100%,280px);height:27px;box-sizing:border-box;padding:2px 6px;margin:-3px 0;
   border:1px solid #8eafe8;border-radius:5px;outline:none;background:#171b22;color:#fff;font:700 15px "Segoe UI","Microsoft YaHei",sans-serif}
 .name-editor.invalid{border-color:#ef8888}
+.decision{height:30px;padding:0 10px;border:1px solid #4b5260;border-radius:8px;
+  background:#303640;color:#dce4ef;cursor:pointer;font:600 12px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  transition:background-color .14s cubic-bezier(.25,1,.5,1),border-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1)}
+.decision:hover,.decision:focus-visible{background:#404858;border-color:#65728a;outline:none}
+.decision.primary{background:#dce6f8;border-color:#dce6f8;color:#1b2940}
+.decision.primary:hover,.decision.primary:focus-visible{background:#eef3fd;border-color:#eef3fd}
+.decision.danger{background:#614049;border-color:#78505a;color:#ffe4e6}
+.decision.danger:hover,.decision.danger:focus-visible{background:#77505a;border-color:#95636c}
+.decision:disabled{opacity:.55;cursor:default}
+.project.editing .actions,.project.confirming .actions{animation:actions-in .18s cubic-bezier(.25,1,.5,1) both}
+@keyframes actions-in{from{opacity:.55;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
 .empty{padding:30px 13px;color:#929cac;font-size:12px}
 @media(max-height:650px){body{padding-top:64px}.welcome{margin-top:25px}.project{min-height:76px}}
-@media(prefers-reduced-motion:reduce){#browse,.project,.rename,.remove{transition:none}}
+@media(prefers-reduced-motion:reduce){#browse,.project,.rename,.remove,.decision{transition:none}.project.editing .actions,.project.confirming .actions{animation:none}}
 </style></head><body><main><div class="brand"><svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="Pi Desktop"><rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#101010"/><text x="512" y="866" font-family="'Times New Roman'" font-weight="bold" font-size="1450" fill="#fff" text-anchor="middle">π</text></svg><span>Pi Desktop</span></div><header class="welcome"><h1 id="greeting">欢迎使用 Pi Desktop</h1><p class="intro">从最近项目继续，或指定其他工作目录。</p><button id="browse"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开项目目录</button></header><section class="recent"><div class="heading">最近项目<span id="project-count"></span></div><div id="projects"><div class="empty">正在加载项目…</div></div></section></main></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -647,6 +662,28 @@ function toHexColor(rgb) {
   return `#${h(m[1])}${h(m[2])}${h(m[3])}`;
 }
 
+async function syncTabColor(entry, content) {
+  if (entry.id !== activeTabId || entry.content !== content || !mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const bg = await content.webContents.executeJavaScript(
+      `(() => { const el = document.querySelector("header") || document.body;
+        const c = getComputedStyle(el).backgroundColor;
+        return c && c !== "rgba(0, 0, 0, 0)" ? c : "rgb(16,16,16)"; })()`
+    );
+    if (entry.id !== activeTabId || entry.content !== content) return;
+    const hex = toHexColor(bg);
+    if (hex) {
+      const fg = isLightColor(bg) ? "#1f2328" : "#dbe4f0";
+      mainWindow.setTitleBarOverlay({ color: hex, symbolColor: fg, height: STRIP_HEIGHT });
+      if (stripView && !stripView.webContents.isDestroyed()) {
+        stripView.webContents.send("app:bar-color", hex, fg);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 // 单个主窗口 + 顶部标签条(浏览器式标签页); 每个标签一个 pi-web 内容视图
 function pushTabState() {
   if (!stripView || stripView.webContents.isDestroyed()) return;
@@ -673,6 +710,7 @@ function layoutWindow() {
   if (stripView) stripView.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
   const active = tabs.get(activeTabId);
   if (active?.content) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
+  if (active?.pendingContent) active.pendingContent.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
   const visible = mainWindow.contentView.children.find((view) => view !== stripView);
   if (visible && visible !== active?.content) visible.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
 }
@@ -680,10 +718,19 @@ function layoutWindow() {
 function showTabView(entry) {
   if (!mainWindow || mainWindow.isDestroyed() || !entry.content) return;
   layoutWindow();
+  if (entry.pendingContent && !mainWindow.contentView.children.includes(entry.pendingContent)) {
+    const index = mainWindow.contentView.children.indexOf(entry.content);
+    mainWindow.contentView.addChildView(entry.pendingContent, index < 0 ? undefined : index);
+  }
   if (!mainWindow.contentView.children.includes(entry.content)) mainWindow.contentView.addChildView(entry.content);
+  const keep = new Set([stripView, entry.content, entry.pendingContent]);
+  for (const view of [...mainWindow.contentView.children]) {
+    if (!keep.has(view)) mainWindow.contentView.removeChildView(view);
+  }
   for (const tab of tabs.values()) {
-    if (tab !== entry && tab.content && mainWindow.contentView.children.includes(tab.content)) {
-      mainWindow.contentView.removeChildView(tab.content);
+    if (tab.retiringContent && !mainWindow.contentView.children.includes(tab.retiringContent)) {
+      tab.retiringContent.webContents.close();
+      tab.retiringContent = null;
     }
   }
 }
@@ -696,6 +743,20 @@ function showInitialWindowIfReady() {
 }
 
 function destroyTabContent(entry) {
+  if (entry.retiringContent) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(entry.retiringContent)) {
+      mainWindow.contentView.removeChildView(entry.retiringContent);
+    }
+    entry.retiringContent.webContents.close();
+    entry.retiringContent = null;
+  }
+  if (entry.pendingContent) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(entry.pendingContent)) {
+      mainWindow.contentView.removeChildView(entry.pendingContent);
+    }
+    entry.pendingContent.webContents.close();
+    entry.pendingContent = null;
+  }
   if (!entry.content) return;
   try {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -807,24 +868,7 @@ function wireContentEvents(entry) {
         if (cwd) entry.cwdBase = String(cwd).split(/[\\/]/).filter(Boolean).pop();
       })
       .catch(() => {});
-    if (entry.id !== activeTabId || !mainWindow || mainWindow.isDestroyed()) return;
-    try {
-      const bg = await content.webContents.executeJavaScript(
-        `(() => { const el = document.querySelector("header") || document.body;
-          const c = getComputedStyle(el).backgroundColor;
-          return c && c !== "rgba(0, 0, 0, 0)" ? c : "rgb(16,16,16)"; })()`
-      );
-      const hex = toHexColor(bg);
-      if (hex) {
-        const fg = isLightColor(bg) ? "#1f2328" : "#dbe4f0";
-        mainWindow.setTitleBarOverlay({ color: hex, symbolColor: fg, height: STRIP_HEIGHT });
-        if (stripView && !stripView.webContents.isDestroyed()) {
-          stripView.webContents.send("app:bar-color", hex, fg);
-        }
-      }
-    } catch {
-      /* ignore */
-    }
+    await syncTabColor(entry, content);
   });
 
   // 服务未就绪/被重启时自动重试加载, 不留白板错误页
@@ -1125,15 +1169,80 @@ function homeEntryForSender(sender) {
 }
 
 function openProjectInTab(entry, cwd) {
-  const base = path.basename(cwd);
-  entry.project = projectDisplayName(cwd);
-  entry.cwd = cwd;
-  entry.cwdBase = base;
-  entry.url = `${homeUrl()}/?cwd=${encodeURIComponent(cwd)}`;
-  entry.content.webContents.loadURL(entry.url);
-  if (entry.id === activeTabId) mainWindow.setTitle(`Pi Desktop - ${entry.project} | Powered by Pi`);
-  pushTabState();
-  recordOpenedProject(cwd);
+  if (entry.pendingContent) {
+    if (mainWindow.contentView.children.includes(entry.pendingContent)) mainWindow.contentView.removeChildView(entry.pendingContent);
+    entry.pendingContent.webContents.close();
+  }
+  const home = entry.content;
+  const url = `${homeUrl()}/?cwd=${encodeURIComponent(cwd)}`;
+  const pending = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, "home-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      partition: `tab-${entry.id}`,
+    },
+  });
+  pending.setBackgroundColor("#1b1d22");
+  entry.pendingContent = pending;
+  if (entry.id === activeTabId) showTabView(entry);
+  home.webContents.send("app:home-opening", cwd);
+  let finished = false;
+  const fail = () => {
+    if (finished || entry.pendingContent !== pending) return;
+    finished = true;
+    entry.pendingContent = null;
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(pending)) {
+      mainWindow.contentView.removeChildView(pending);
+    }
+    pending.webContents.close();
+    if (!home.webContents.isDestroyed()) home.webContents.send("app:home-open-failed", cwd);
+  };
+  pending.webContents.on("did-fail-load", (_e, code, _description, _url, mainFrame) => {
+    if (code !== -3 && mainFrame) fail();
+  });
+  pending.webContents.once("did-finish-load", async () => {
+    try {
+      const ready = await pending.webContents.executeJavaScript(`new Promise((resolve) => {
+        const cwd = ${JSON.stringify(cwd)}.toLowerCase();
+        const check = () => [...document.querySelectorAll("button[title]")]
+          .some((button) => button.title.toLowerCase() === cwd);
+        if (check()) return resolve(true);
+        const observer = new MutationObserver(() => {
+          if (check()) { observer.disconnect(); resolve(true); }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["title"] });
+        setTimeout(() => { observer.disconnect(); resolve(false); }, 15000);
+      })`);
+      if (!ready) return fail();
+      if (finished || entry.pendingContent !== pending || !tabs.has(entry.id)) return;
+      finished = true;
+      entry.pendingContent = null;
+      entry.content = pending;
+      entry.project = projectDisplayName(cwd);
+      entry.cwd = cwd;
+      entry.cwdBase = path.basename(cwd);
+      entry.url = url;
+      wireContentEvents(entry);
+      entry.retiringContent = home;
+      if (entry.id === activeTabId) {
+        showTabView(entry);
+        mainWindow.setTitle(`Pi Desktop - ${entry.project} | Powered by Pi`);
+        void syncTabColor(entry, pending);
+      }
+      if (entry.retiringContent && !mainWindow.contentView.children.includes(home)) {
+        home.webContents.close();
+        entry.retiringContent = null;
+      }
+      pushTabState();
+      recordOpenedProject(cwd);
+    } catch {
+      fail();
+    }
+  });
+  pending.webContents.loadURL(url).catch(fail);
 }
 
 // 标签条按钮事件

@@ -9,9 +9,21 @@ window.addEventListener("DOMContentLoaded", () => {
   let ignoreClicksUntil = 0;
   let lastProjectsSignature = "";
   let pendingProjects = null;
+  let openingCwd = "";
+
+  function setOpening(cwd, failed = false) {
+    openingCwd = failed ? "" : cwd;
+    for (const row of list.querySelectorAll(".project")) {
+      row.classList.toggle("opening", row.dataset.cwd === openingCwd);
+      const path = row.querySelector(".cwd");
+      path.textContent = row.dataset.cwd === cwd
+        ? failed ? "无法打开项目，请重试。" : "正在打开项目…"
+        : row.dataset.cwd;
+    }
+  }
 
   function applyPendingProjects() {
-    if (pendingProjects && !draggedCwd && !list.querySelector(".name-editor")) {
+    if (pendingProjects && !draggedCwd && !list.querySelector(".editing,.confirming")) {
       const projects = pendingProjects;
       pendingProjects = null;
       renderProjects(projects);
@@ -24,13 +36,30 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function beginRename(project, name) {
+  function decisionButton(label, kind, action) {
+    const button = document.createElement("button");
+    button.className = `decision ${kind}`.trim();
+    button.textContent = label;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      action();
+    });
+    return button;
+  }
+
+  function beginRename(project, row, name, actions) {
+    row.classList.add("editing");
+    row.draggable = false;
+    const originalActions = [...actions.children];
     const input = document.createElement("input");
     input.className = "name-editor";
     input.value = project.name;
     input.maxLength = 40;
     input.setAttribute("aria-label", "项目显示名称");
     name.replaceWith(input);
+    const confirm = decisionButton("保存", "primary", () => { void finish(true); });
+    const cancel = decisionButton("取消", "", () => { void finish(false); });
+    actions.replaceChildren(confirm, cancel);
     input.focus();
     input.select();
     let finished = false;
@@ -38,10 +67,14 @@ window.addEventListener("DOMContentLoaded", () => {
       if (finished) return;
       finished = true;
       const next = input.value.trim();
+      confirm.disabled = true;
+      cancel.disabled = true;
       if (save && next !== project.name) {
         const result = await ipcRenderer.invoke("app:home-rename-project", project.cwd, next);
         if (!result?.ok) {
           finished = false;
+          confirm.disabled = false;
+          cancel.disabled = false;
           input.classList.add("invalid");
           input.title = result?.message || "无法保存项目名称。";
           input.focus();
@@ -50,6 +83,14 @@ window.addEventListener("DOMContentLoaded", () => {
         name.textContent = next;
       }
       input.replaceWith(name);
+      actions.replaceChildren(...originalActions);
+      row.classList.remove("editing");
+      row.draggable = true;
+      if (save) {
+        pendingProjects = null;
+        lastProjectsSignature = "";
+        ipcRenderer.send("app:home-ready");
+      }
       applyPendingProjects();
     }
     input.addEventListener("keydown", (event) => {
@@ -62,7 +103,43 @@ window.addEventListener("DOMContentLoaded", () => {
         void finish(false);
       }
     });
-    input.addEventListener("blur", () => { void finish(true); });
+    input.addEventListener("input", () => input.classList.remove("invalid"));
+  }
+
+  function beginRemove(project, row, name, cwd, actions) {
+    row.classList.add("confirming");
+    row.draggable = false;
+    const originalActions = [...actions.children];
+    const originalName = name.textContent;
+    const originalCwd = cwd.textContent;
+    name.textContent = "从最近项目移除？";
+    cwd.textContent = "项目目录和会话将保留";
+    const confirm = decisionButton("移除", "danger", async () => {
+      confirm.disabled = true;
+      cancel.disabled = true;
+      const result = await ipcRenderer.invoke("app:home-remove-project", project.cwd);
+      if (!result?.ok) {
+        cwd.textContent = "操作未完成，请重试。";
+        confirm.disabled = false;
+        cancel.disabled = false;
+        return;
+      }
+      row.classList.remove("confirming");
+      row.remove();
+      pendingProjects = null;
+      lastProjectsSignature = "";
+      ipcRenderer.send("app:home-ready");
+    });
+    const cancel = decisionButton("取消", "", () => {
+      name.textContent = originalName;
+      cwd.textContent = originalCwd;
+      actions.replaceChildren(...originalActions);
+      row.classList.remove("confirming");
+      row.draggable = true;
+      applyPendingProjects();
+    });
+    actions.replaceChildren(confirm, cancel);
+    cancel.focus();
   }
 
   const greetings = [
@@ -93,7 +170,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function renderProjects(projects) {
     const signature = JSON.stringify(projects.map(({ cwd, name, count }) => [cwd, name, count]));
     if (signature === lastProjectsSignature) return;
-    if (draggedCwd || list.querySelector(".name-editor")) {
+    if (draggedCwd || list.querySelector(".editing,.confirming")) {
       pendingProjects = projects;
       return;
     }
@@ -130,7 +207,8 @@ window.addEventListener("DOMContentLoaded", () => {
       name.textContent = project.name;
       const cwd = document.createElement("span");
       cwd.className = "cwd";
-      cwd.textContent = project.cwd;
+      cwd.textContent = project.cwd === openingCwd ? "正在打开项目…" : project.cwd;
+      if (project.cwd === openingCwd) row.classList.add("opening");
       const count = document.createElement("span");
       count.className = "count";
       count.textContent = `${project.count} 个会话`;
@@ -151,19 +229,21 @@ window.addEventListener("DOMContentLoaded", () => {
       row.append(grip, folder, details, count, actions);
       rename.addEventListener("click", (event) => {
         event.stopPropagation();
-        beginRename(project, name);
+        beginRename(project, row, name, actions);
       });
       remove.addEventListener("click", (event) => {
         event.stopPropagation();
-        void ipcRenderer.invoke("app:home-remove-project", project.cwd);
+        beginRemove(project, row, name, cwd, actions);
       });
       row.addEventListener("click", (event) => {
-        if (Date.now() < ignoreClicksUntil || event.target.closest(".rename,.remove,.name-editor")) return;
+        if (Date.now() < ignoreClicksUntil || openingCwd === project.cwd || row.classList.contains("editing") || row.classList.contains("confirming") || event.target.closest("button,input")) return;
+        setOpening(project.cwd);
         ipcRenderer.send("app:home-open-project", project.cwd);
       });
       row.addEventListener("keydown", (event) => {
         if (event.target === row && (event.key === "Enter" || event.key === " ")) {
           event.preventDefault();
+          setOpening(project.cwd);
           ipcRenderer.send("app:home-open-project", project.cwd);
         }
       });
@@ -210,6 +290,8 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     }
   }
+  ipcRenderer.on("app:home-opening", (_e, cwd) => setOpening(cwd));
+  ipcRenderer.on("app:home-open-failed", (_e, cwd) => setOpening(cwd, true));
   ipcRenderer.on("app:home-projects", (_e, projects) => renderProjects(projects));
   ipcRenderer.send("app:home-ready");
 });
