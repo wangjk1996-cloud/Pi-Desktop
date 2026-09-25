@@ -1,6 +1,6 @@
 # Pi Desktop
 
-pi coding agent 的 Windows 桌面客户端。双击即用、独立窗口、托盘驻留，内核与壳全自动更新。
+pi coding agent 的 Windows 桌面客户端，提供多项目标签页、托盘驻留和自动更新。
 
 > 界面内核来自上游项目 [pi-web](https://www.npmjs.com/package/@agegr/pi-web)（MIT），本仓库为其桌面化封装，并在此基础上实现了完整的自动更新体系。
 

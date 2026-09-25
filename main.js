@@ -482,36 +482,36 @@ function homeUrl() {
 function tabHomeUrl() {
   const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;overflow:hidden;background:#1b1d22;color:#eff1f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
-body{box-sizing:border-box;padding:clamp(64px,13vh,112px) 32px 24px}
-main{width:min(100%,780px);height:100%;min-height:0;margin:0 auto;display:flex;flex-direction:column}
+body{box-sizing:border-box;padding:clamp(64px,18vh,148px) 32px 24px}
+main{width:min(100%,840px);height:100%;min-height:0;margin:0 auto;display:flex;flex-direction:column}
 .brand{display:flex;align-items:center;gap:18px;flex:none;color:#f2f3f6;font:700 58px/1 "Times New Roman",serif;letter-spacing:.027em}
 .mark{width:64px;height:64px;border-radius:14px;flex:none}
 .welcome{flex:none;margin-top:34px}
-h1{font:500 27px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
-.intro{font-size:13px;line-height:1.7;color:#9da6b5;margin:0}
-#browse{display:inline-flex;align-items:center;gap:10px;height:42px;margin-top:28px;padding:0 16px;
+h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
+.intro{font-size:14px;line-height:1.7;color:#9da6b5;margin:0}
+#browse{display:inline-flex;align-items:center;gap:8px;height:40px;margin-top:28px;padding:0 12px;
   border:1px solid #c4d0e8;border-radius:8px;background:#dce6f8;color:#1b2940;
-  cursor:pointer;font:600 13px "Segoe UI","Microsoft YaHei",sans-serif;transition:background .12s,border-color .12s}
+  cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .12s,border-color .12s}
 #browse:hover{background:#eef3fd;border-color:#eef3fd}
 #browse:focus-visible,.project:focus-visible{outline:2px solid #8eafe8;outline-offset:2px}
-#browse svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.recent{display:flex;flex:1;flex-direction:column;min-height:0;margin-top:28px}
+#browse svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.recent{display:flex;flex:1;flex-direction:column;min-height:0;margin-top:30px}
 .heading{display:flex;flex:none;align-items:baseline;justify-content:space-between;gap:16px;padding-bottom:15px;
-  border-bottom:1px solid #383b43;font-size:14px;font-weight:600;color:#e5e8ef}
+  border-bottom:1px solid #383b43;font-size:15px;font-weight:600;color:#e5e8ef}
 #project-count{font-size:12px;font-weight:400;color:#858e9d}
 #projects{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#414650 transparent;padding:7px 4px 0 0}
 #projects::-webkit-scrollbar{width:6px}
 #projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
-.project{display:flex;align-items:center;gap:15px;width:100%;min-height:68px;padding:10px 13px;
-  border:0;border-radius:8px;background:transparent;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
-.project:hover{background:#282c35}
+.project{display:flex;align-items:center;gap:15px;width:100%;min-height:90px;padding:10px 13px;margin-top:7px;
+  border:1px solid #2a2e36;border-radius:8px;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
+.project:hover{background:#2b3039}
 .folder{display:grid;place-items:center;flex:0 0 23px;color:#9aa6ba}
 .folder svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.name{font-size:13px;font-weight:600}.cwd{font-size:11px;color:#8f98a8;margin-top:5px}
+.name{font-size:15px;font-weight:700}.cwd{font-size:12px;color:#8f98a8;margin-top:5px}
 .count{flex:none;font-size:11px;color:#858e9d}
 .empty{padding:30px 13px;color:#929cac;font-size:12px}
-@media(max-height:650px){.welcome{margin-top:25px}}
+@media(max-height:650px){body{padding-top:64px}.welcome{margin-top:25px}.project{min-height:76px}}
 </style></head><body><main><div class="brand"><svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="Pi Desktop"><rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#101010"/><text x="512" y="866" font-family="'Times New Roman'" font-weight="bold" font-size="1450" fill="#fff" text-anchor="middle">π</text></svg><span>Pi Desktop</span></div><header class="welcome"><h1 id="greeting">欢迎使用 Pi Desktop</h1><p class="intro">从最近项目继续，或指定其他工作目录。</p><button id="browse"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开项目目录</button></header><section class="recent"><div class="heading">最近项目<span id="project-count"></span></div><div id="projects"><div class="empty">正在加载项目…</div></div></section></main></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -520,18 +520,18 @@ function stripHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#15161a}
 #bar{display:flex;align-items:center;gap:5px;height:${STRIP_HEIGHT}px;padding:0 146px 0 9px;
-  box-sizing:border-box;-webkit-app-region:drag;color:#d9dce3;font:12px "Segoe UI","Microsoft YaHei",sans-serif;user-select:none}
+  box-sizing:border-box;-webkit-app-region:drag;color:#d9dce3;font:14px "Segoe UI","Microsoft YaHei",sans-serif;user-select:none}
 #tabs{display:flex;align-items:center;gap:5px;flex:0 1 auto;min-width:0;height:100%;
   overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-app-region:no-drag}
 #tabs::-webkit-scrollbar{display:none}
-.tab{display:flex;align-items:center;gap:9px;flex:0 0 172px;width:172px;height:31px;
-  padding:0 9px 0 11px;border:1px solid transparent;border-radius:8px;
+.tab{display:flex;align-items:center;gap:7px;flex:0 0 148px;width:148px;height:29px;
+  padding:0 8px 0 10px;border:1px solid transparent;border-radius:7px;
   background:#22242a;color:#aeb4c0;cursor:pointer;white-space:nowrap;box-sizing:border-box;
   transition:background .12s,border-color .12s}
 .tab:hover{background:#2b2e36;color:#f0f2f6}
 .tab.active{background:#353944;border-color:#4c5260;color:#fff}
 .tab:focus-visible,#add:focus-visible,.nav:focus-visible{outline:2px solid #7eaeff;outline-offset:-2px}
-.tab .label{flex:1;overflow:hidden;text-overflow:ellipsis}
+.tab .label{flex:1;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .tab .x{border:none;background:transparent;color:inherit;font-size:16px;cursor:pointer;border-radius:4px;
   width:19px;height:19px;padding:0;opacity:.65;line-height:17px}
 .tab .x:hover{background:rgba(255,255,255,.16);opacity:1}
