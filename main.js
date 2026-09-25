@@ -562,7 +562,14 @@ function destroyTabContent(entry) {
 function ensureTabContent(entry) {
   if (entry.content && !entry.content.webContents.isDestroyed()) return;
   const content = new WebContentsView({
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      // 每个标签独立的内存存储分区: 不读 pi-web 记住的"上次项目", 落在首页
+      partition: `tab-${entry.id}`,
+    },
   });
   entry.content = content;
   wireContentEvents(entry);
@@ -632,20 +639,6 @@ function wireContentEvents(entry) {
         if (cwd) entry.cwdBase = String(cwd).split(/[\\/]/).filter(Boolean).pop();
       })
       .catch(() => {});
-    // 新建的标签页(+号打开): pi-web 会自动跳进最近会话, 检测到后点 logo 退回首页(会话列表)
-    if (entry.fresh) {
-      entry.fresh = false;
-      content.webContents
-        .executeJavaScript(
-          `(() => { const tryHome = (n) => {
-              const hasComposer = !!document.querySelector("textarea");
-              const logo = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim() === "Pi Web");
-              if (hasComposer && logo) { logo.click(); return; }
-              if (n > 0) setTimeout(() => tryHome(n - 1), 400);
-            }; tryHome(25); })()`
-        )
-        .catch(() => {});
-    }
     if (entry.id !== activeTabId || !mainWindow || mainWindow.isDestroyed()) return;
     try {
       const bg = await content.webContents.executeJavaScript(
@@ -698,7 +691,6 @@ function newTab(url) {
     unread: false,
     running: false,
     lastSeen: Date.now(),
-    fresh: tabs.size > 0, // 首个标签展示应用默认页; +号新建的展开项目选择器
   };
   tabs.set(id, entry);
   switchTab(id);
