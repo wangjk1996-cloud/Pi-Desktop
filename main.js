@@ -140,6 +140,9 @@ let tabSeq = 0;
 let activeTabId = null;
 let mainWindow = null;
 let stripView = null;
+let stripReady = false;
+let firstContentReady = false;
+let initialWindowShown = false;
 
 function appendLog(file, text) {
   try {
@@ -534,7 +537,8 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .intro{font-size:14px;line-height:1.7;color:#9da6b5;margin:0}
 #browse{display:inline-flex;align-items:center;gap:8px;height:40px;margin-top:28px;padding:0 12px;
   border:1px solid transparent;border-radius:10px;background:#dce6f8;color:#1b2940;
-  box-shadow:inset 0 0 0 1px #c4d0e8;cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .18s ease,box-shadow .18s ease}
+  box-shadow:inset 0 0 0 1px #c4d0e8;cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  transition:background-color .14s cubic-bezier(.25,1,.5,1),box-shadow .14s cubic-bezier(.25,1,.5,1)}
 #browse:hover{background:#eef3fd;box-shadow:inset 0 0 0 1px #eef3fd}
 #browse:focus-visible,.project:focus-visible{outline:2px solid #8eafe8;outline-offset:2px}
 #browse svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -547,7 +551,7 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 #projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
 .project{display:flex;align-items:center;gap:15px;width:100%;min-height:90px;padding:10px 13px;margin-top:7px;
   box-sizing:border-box;border:1px solid transparent;border-radius:10px;box-shadow:inset 0 0 0 1px #2a2e36;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit;
-  transition:background-color .18s ease,box-shadow .18s ease}
+  transition:background-color .14s cubic-bezier(.25,1,.5,1)}
 .project:hover{background:#2b3039}
 .project.dragging{opacity:.45}
 .project.drop-before{box-shadow:inset 0 2px #8eafe8}
@@ -561,15 +565,17 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .count{flex:none;font-size:11px;color:#858e9d}
 .actions{display:flex;align-items:center;gap:3px;flex:none}
 .rename,.remove{display:grid;place-items:center;width:29px;height:29px;padding:0;border:0;border-radius:8px;
-  background:transparent;color:#aeb8c8;cursor:pointer;transition:background-color .18s ease,color .18s ease,transform .18s ease}
-.rename:hover,.rename:focus-visible{background:#354055;color:#d0dfff;outline:none;transform:translateY(-1px)}
-.remove:hover,.remove:focus-visible{background:#43343a;color:#f0b9bc;outline:none;transform:translateY(-1px)}
+  background:transparent;color:#aeb8c8;cursor:pointer;
+  transition:background-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1)}
+.rename:hover,.rename:focus-visible{background:#354055;color:#d0dfff;outline:none}
+.remove:hover,.remove:focus-visible{background:#43343a;color:#f0b9bc;outline:none}
 .rename svg,.remove svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .name-editor{min-width:0;width:min(100%,280px);height:27px;box-sizing:border-box;padding:2px 6px;margin:-3px 0;
   border:1px solid #8eafe8;border-radius:5px;outline:none;background:#171b22;color:#fff;font:700 15px "Segoe UI","Microsoft YaHei",sans-serif}
 .name-editor.invalid{border-color:#ef8888}
 .empty{padding:30px 13px;color:#929cac;font-size:12px}
 @media(max-height:650px){body{padding-top:64px}.welcome{margin-top:25px}.project{min-height:76px}}
+@media(prefers-reduced-motion:reduce){#browse,.project,.rename,.remove{transition:none}}
 </style></head><body><main><div class="brand"><svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="Pi Desktop"><rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#101010"/><text x="512" y="866" font-family="'Times New Roman'" font-weight="bold" font-size="1450" fill="#fff" text-anchor="middle">π</text></svg><span>Pi Desktop</span></div><header class="welcome"><h1 id="greeting">欢迎使用 Pi Desktop</h1><p class="intro">从最近项目继续，或指定其他工作目录。</p><button id="browse"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开项目目录</button></header><section class="recent"><div class="heading">最近项目<span id="project-count"></span></div><div id="projects"><div class="empty">正在加载项目…</div></div></section></main></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -586,7 +592,7 @@ svg{shape-rendering:geometricPrecision}
 .tab{display:flex;align-items:center;gap:7px;flex:0 0 148px;width:148px;height:29px;
   padding:0 8px 0 10px;border:1px solid transparent;border-radius:9px;
   background:#22242a;color:#aeb4c0;cursor:pointer;white-space:nowrap;box-sizing:border-box;
-  transition:background-color .18s ease,color .18s ease,box-shadow .18s ease}
+  transition:background-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1)}
 .tab:hover{background:#2b2e36;color:#f0f2f6}
 .tab.active{background:#353944;box-shadow:inset 0 0 0 1px #4c5260;color:#fff}
 .tab:focus-visible,#add:focus-visible,.nav:focus-visible{outline:2px solid #7eaeff;outline-offset:-2px}
@@ -603,10 +609,10 @@ svg{shape-rendering:geometricPrecision}
 .dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:#6b7280}
 .dot.unread{background:#3b82f6}
 .dot.running{width:10px;height:10px;min-width:10px;background:transparent;
-  border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
+  border:2px solid #3b82f6}
 #add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:9px;
   background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0;
-  transition:background-color .18s ease,color .18s ease}
+  transition:background-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1)}
 #add svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
 .nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;
   stroke-linecap:round;stroke-linejoin:round}
@@ -622,7 +628,7 @@ svg{shape-rendering:geometricPrecision}
 #bar.light #add,#bar.light .nav{color:#4c5665}
 #bar.light #add:hover,#bar.light .nav:hover{background:#dce2e9;color:#1f2328}
 #bar.light #all{background:#e9ebef;box-shadow:inset 0 0 0 1px #c6cdd7}
-@keyframes spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.tab,#add,.nav{transition:none}}
 </style></head><body><div id="bar"><div id="tabs" role="tablist"></div><button id="add" title="新建标签页" aria-label="新建标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><div id="nav"><button class="nav" id="left" title="向左滚动标签页" aria-label="向左滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button><button class="nav" id="right" title="向右滚动标签页" aria-label="向右滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button class="nav" id="all" title="全部标签页" aria-label="全部标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -666,7 +672,27 @@ function layoutWindow() {
   const [w, h] = mainWindow.getContentSize();
   if (stripView) stripView.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
   const active = tabs.get(activeTabId);
-  if (active) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
+  if (active?.content) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
+  const visible = mainWindow.contentView.children.find((view) => view !== stripView);
+  if (visible && visible !== active?.content) visible.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
+}
+
+function showTabView(entry) {
+  if (!mainWindow || mainWindow.isDestroyed() || !entry.content) return;
+  layoutWindow();
+  if (!mainWindow.contentView.children.includes(entry.content)) mainWindow.contentView.addChildView(entry.content);
+  for (const tab of tabs.values()) {
+    if (tab !== entry && tab.content && mainWindow.contentView.children.includes(tab.content)) {
+      mainWindow.contentView.removeChildView(tab.content);
+    }
+  }
+}
+
+function showInitialWindowIfReady() {
+  if (!initialWindowShown && stripReady && firstContentReady && mainWindow && !mainWindow.isDestroyed()) {
+    initialWindowShown = true;
+    mainWindow.show();
+  }
 }
 
 function destroyTabContent(entry) {
@@ -699,7 +725,7 @@ function ensureTabContent(entry) {
       partition: `tab-${entry.id}`,
     },
   });
-  if (entry.url.startsWith("data:text/html")) content.setBackgroundColor("#1b1d22");
+  content.setBackgroundColor("#1b1d22");
   entry.content = content;
   entry.homeReady = !entry.url.startsWith("data:text/html");
   wireContentEvents(entry);
@@ -711,26 +737,12 @@ function switchTab(id) {
   const prev = tabs.get(activeTabId);
   if (prev && prev.id !== id) {
     prev.lastSeen = Date.now();
-    // 后台标签只从窗口卸下, 不销毁: 切回瞬时无刷新, 页面状态完整保留
-    try {
-      if (prev.content && !prev.content.webContents.isDestroyed()) {
-        mainWindow.contentView.removeChildView(prev.content);
-      }
-    } catch {
-      /* ignore */
-    }
   }
   activeTabId = id;
   const t = tabs.get(id);
   t.unread = false; // 切到该标签即视为已读
   ensureTabContent(t);
-  if (t.homeReady) {
-    try {
-      mainWindow.contentView.addChildView(t.content);
-    } catch {
-      /* ignore */
-    }
-  }
+  if (t.homeReady) showTabView(t);
   layoutWindow();
   mainWindow.setTitle(
     `Pi Desktop - ${t.project || "首页"} | Powered by Pi`
@@ -779,10 +791,10 @@ function wireContentEvents(entry) {
   content.webContents.on("did-finish-load", async () => {
     if (entry.url.startsWith("data:text/html")) {
       entry.homeReady = true;
-      if (entry.id === activeTabId && mainWindow && !mainWindow.isDestroyed() &&
-          !mainWindow.contentView.children.includes(content)) {
-        mainWindow.contentView.addChildView(content);
-        layoutWindow();
+      if (entry.id === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
+        showTabView(entry);
+        firstContentReady = true;
+        showInitialWindowIfReady();
       }
     }
     // 抓取项目路径按钮文本, 提取项目目录名(供状态轮询匹配)
@@ -872,7 +884,11 @@ function closeTab(id) {
 }
 
 function createMainWindow() {
+  stripReady = false;
+  firstContentReady = false;
+  initialWindowShown = false;
   mainWindow = new BrowserWindow({
+    show: false,
     width: 1280,
     height: 820,
     minWidth: 940,
@@ -884,6 +900,7 @@ function createMainWindow() {
     titleBarOverlay: { color: "#101010", symbolColor: "#dbe4f0", height: STRIP_HEIGHT },
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   });
+  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent('<html style="height:100%;background:#1b1d22"><body style="margin:0"></body></html>'));
 
   stripView = new WebContentsView({
     webPreferences: {
@@ -893,8 +910,12 @@ function createMainWindow() {
     },
   });
   mainWindow.contentView.addChildView(stripView);
+  stripView.webContents.on("did-finish-load", () => {
+    stripReady = true;
+    pushTabState();
+    showInitialWindowIfReady();
+  });
   stripView.webContents.loadURL(stripHtml());
-  stripView.webContents.on("did-finish-load", () => pushTabState());
 
   layoutWindow();
   mainWindow.on("resize", () => { layoutWindow(); hideOverflow(); });
@@ -1008,7 +1029,7 @@ svg{shape-rendering:geometricPrecision}
 #list::-webkit-scrollbar{display:none}
 .row{display:flex;align-items:center;gap:10px;width:100%;height:42px;padding:0 11px;border:0;
   border-radius:9px;background:transparent;color:#dce1e9;text-align:left;cursor:pointer;font:inherit;
-  transition:background-color .18s ease,color .18s ease}
+  transition:background-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1)}
 .row:hover,.row:focus-visible{background:#30343d;outline:none}
 .row.active{background:#2e3440;color:#fff}
 .num{color:#7f8998;font-size:11px;width:18px;flex:0 0 18px}
@@ -1016,6 +1037,7 @@ svg{shape-rendering:geometricPrecision}
 .dot{width:7px;height:7px;border-radius:50%;background:#687383;flex:0 0 7px}
 .dot.unread{background:#6aa6f5}.dot.running{background:#6aa6f5}
 .check{width:15px;color:#9ec1ff;text-align:center}
+@media(prefers-reduced-motion:reduce){.row{transition:none}}
 </style></head><body><div id="panel"><div id="head">全部标签页</div><div id="list"></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }

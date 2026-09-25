@@ -205,7 +205,7 @@ window.addEventListener("DOMContentLoaded", () => {
         const distance = previousTop - row.getBoundingClientRect().top;
         if (Math.abs(distance) > 1) {
           row.animate([{ transform: `translateY(${distance}px)` }, { transform: "translateY(0)" }],
-            { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" });
+            { duration: 260, easing: "cubic-bezier(.25,1,.5,1)" });
         }
       }
     }
