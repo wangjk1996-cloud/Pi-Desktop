@@ -82,6 +82,33 @@ function stateFile() {
   return path.join(app.getPath("userData"), "update-state.json");
 }
 
+function projectPreferencesFile() {
+  return path.join(app.getPath("userData"), "project-preferences.json");
+}
+function projectKey(cwd) {
+  return path.resolve(String(cwd)).toLowerCase();
+}
+let projectPreferences = null;
+function getProjectPreferences() {
+  if (projectPreferences) return projectPreferences;
+  try {
+    const saved = JSON.parse(fs.readFileSync(projectPreferencesFile(), "utf8"));
+    projectPreferences = {
+      names: saved.names && typeof saved.names === "object" ? saved.names : {},
+      order: Array.isArray(saved.order) ? saved.order : [],
+    };
+  } catch {
+    projectPreferences = { names: {}, order: [] };
+  }
+  return projectPreferences;
+}
+function saveProjectPreferences() {
+  fs.writeFileSync(projectPreferencesFile(), JSON.stringify(getProjectPreferences(), null, 2));
+}
+function projectDisplayName(cwd) {
+  return getProjectPreferences().names[projectKey(cwd)] || path.basename(cwd);
+}
+
 let tray = null;
 let serverProcess = null;
 let serverPort = DEFAULT_PORT;
@@ -90,7 +117,7 @@ let quitUpdateDone = false;
 let reusedExternal = false; // 当前复用的是外部 pi-web 服务(可能随时退出)
 let watchdog = null;
 
-// 标签页: id -> { id, content, url, project, cwdBase, unread, running, lastSeen }
+// 标签页: id -> { id, content, url, project, cwd, cwdBase, unread, running, lastSeen }
 const STRIP_HEIGHT = 40;
 const OVERFLOW_WIDTH = 224;
 const tabs = new Map();
@@ -503,13 +530,25 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 #projects::-webkit-scrollbar{width:6px}
 #projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
 .project{display:flex;align-items:center;gap:15px;width:100%;min-height:90px;padding:10px 13px;margin-top:7px;
-  border:1px solid #2a2e36;border-radius:8px;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
+  box-sizing:border-box;border:1px solid #2a2e36;border-radius:8px;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
 .project:hover{background:#2b3039}
+.project.dragging{opacity:.45}
+.project.drop-before{box-shadow:inset 0 2px #8eafe8}
+.project.drop-after{box-shadow:inset 0 -2px #8eafe8}
+.grip{display:grid;place-items:center;flex:0 0 15px;color:#727c8d;cursor:grab}
+.grip svg{width:15px;height:19px;fill:currentColor}
 .folder{display:grid;place-items:center;flex:0 0 23px;color:#9aa6ba}
 .folder svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .name{font-size:15px;font-weight:700}.cwd{font-size:12px;color:#8f98a8;margin-top:5px}
 .count{flex:none;font-size:11px;color:#858e9d}
+.rename{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;padding:0;border:0;border-radius:6px;
+  background:transparent;color:#aeb7c5;cursor:pointer;opacity:.6}
+.rename:hover,.rename:focus-visible{background:#39404c;color:#fff;opacity:1;outline:none}
+.rename svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.name-editor{min-width:0;width:min(100%,280px);height:27px;box-sizing:border-box;padding:2px 6px;margin:-3px 0;
+  border:1px solid #8eafe8;border-radius:5px;outline:none;background:#171b22;color:#fff;font:700 15px "Segoe UI","Microsoft YaHei",sans-serif}
+.name-editor.invalid{border-color:#ef8888}
 .empty{padding:30px 13px;color:#929cac;font-size:12px}
 @media(max-height:650px){body{padding-top:64px}.welcome{margin-top:25px}.project{min-height:76px}}
 </style></head><body><main><div class="brand"><svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="Pi Desktop"><rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#101010"/><text x="512" y="866" font-family="'Times New Roman'" font-weight="bold" font-size="1450" fill="#fff" text-anchor="middle">π</text></svg><span>Pi Desktop</span></div><header class="welcome"><h1 id="greeting">欢迎使用 Pi Desktop</h1><p class="intro">从最近项目继续，或指定其他工作目录。</p><button id="browse"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开项目目录</button></header><section class="recent"><div class="heading">最近项目<span id="project-count"></span></div><div id="projects"><div class="empty">正在加载项目…</div></div></section></main></body></html>`;
@@ -532,6 +571,10 @@ html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#15161a}
 .tab.active{background:#353944;border-color:#4c5260;color:#fff}
 .tab:focus-visible,#add:focus-visible,.nav:focus-visible{outline:2px solid #7eaeff;outline-offset:-2px}
 .tab .label{flex:1;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+.tab.renaming .label{display:none}
+.rename-input{flex:1;min-width:0;height:22px;padding:0 4px;border:1px solid #8eafe8;border-radius:4px;
+  outline:none;background:#171b22;color:#fff;font:600 13px "Segoe UI","Microsoft YaHei",sans-serif}
+.rename-input.invalid{border-color:#ef8888}
 .tab .x{border:none;background:transparent;color:inherit;font-size:16px;cursor:pointer;border-radius:4px;
   width:19px;height:19px;padding:0;opacity:.65;line-height:17px}
 .tab .x:hover{background:rgba(255,255,255,.16);opacity:1}
@@ -582,6 +625,7 @@ function pushTabState() {
   const list = [...tabs.values()].map((t) => ({
     id: t.id,
     title: t.project,
+    canRename: !!t.cwd,
     status: t.running ? "running" : t.unread ? "unread" : "idle",
   }));
   stripView.webContents.send("app:tabs", {
@@ -678,7 +722,9 @@ function wireContentEvents(entry) {
   content.webContents.on("page-title-updated", (e, title) => {
     e.preventDefault();
     if (entry.url.startsWith("data:text/html")) return;
-    entry.project = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
+    entry.project = entry.cwd && getProjectPreferences().names[projectKey(entry.cwd)]
+      ? projectDisplayName(entry.cwd)
+      : title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
     if (entry.id === activeTabId) {
       mainWindow.setTitle(
         entry.project
@@ -692,6 +738,17 @@ function wireContentEvents(entry) {
   });
   content.webContents.on("did-navigate", (_e, navUrl) => {
     entry.url = navUrl;
+    try {
+      const cwd = new URL(navUrl).searchParams.get("cwd");
+      if (cwd && cwd !== entry.cwd) {
+        entry.cwd = cwd;
+        entry.cwdBase = path.basename(cwd);
+        entry.project = projectDisplayName(cwd);
+        pushTabState();
+      }
+    } catch {
+      /* 首页 data URL 不含项目路径 */
+    }
   });
 
   // 内容加载后同步标签条/原生按钮配色, 与 pi-web 顶栏协调
@@ -763,6 +820,7 @@ function newTab() {
     content: null, // 后台标签不持有页面实例, 激活时才创建
     url: tabHomeUrl(),
     project: "",
+    cwd: "",
     cwdBase: "",
     unread: false,
     running: false,
@@ -944,15 +1002,57 @@ async function fetchProjects() {
     const byCwd = new Map();
     for (const s of data.sessions || []) {
       if (!s.cwd) continue;
-      const cur = byCwd.get(s.cwd) || { cwd: s.cwd, name: String(s.cwd).split(/[\\/]/).filter(Boolean).pop(), count: 0, last: 0 };
+      const cur = byCwd.get(s.cwd) || { cwd: s.cwd, name: projectDisplayName(s.cwd), count: 0, last: 0 };
       cur.count += 1;
       cur.last = Math.max(cur.last, Date.parse(s.modified) || 0);
       byCwd.set(s.cwd, cur);
     }
-    return [...byCwd.values()].sort((a, b) => b.last - a.last);
+    const ranks = new Map(getProjectPreferences().order.map((key, index) => [key, index]));
+    return [...byCwd.values()].sort((a, b) => {
+      const aRank = ranks.get(projectKey(a.cwd)) ?? Infinity;
+      const bRank = ranks.get(projectKey(b.cwd)) ?? Infinity;
+      return aRank - bRank || b.last - a.last;
+    });
   } catch {
     return [];
   }
+}
+
+async function refreshHomeProjects() {
+  const projects = await fetchProjects();
+  for (const entry of tabs.values()) {
+    if (entry.url.startsWith("data:text/html") && entry.content && !entry.content.webContents.isDestroyed()) {
+      entry.content.webContents.send("app:home-projects", projects);
+    }
+  }
+}
+
+function renameProjectDisplay(cwd, name) {
+  const displayName = String(name || "").trim();
+  if (!displayName || displayName.length > 40 || /[\r\n]/.test(displayName)) {
+    return { ok: false, message: "项目名称应为 1–40 个字。" };
+  }
+  const preferences = getProjectPreferences();
+  const key = projectKey(cwd);
+  const previous = preferences.names[key];
+  if (displayName === path.basename(cwd)) delete preferences.names[key];
+  else preferences.names[key] = displayName;
+  try {
+    saveProjectPreferences();
+  } catch {
+    if (previous === undefined) delete preferences.names[key];
+    else preferences.names[key] = previous;
+    return { ok: false, message: "无法保存项目名称。" };
+  }
+  for (const entry of tabs.values()) {
+    if (entry.cwd && projectKey(entry.cwd) === key) {
+      entry.project = displayName;
+      if (entry.id === activeTabId) mainWindow.setTitle(`Pi Desktop - ${displayName} | Powered by Pi`);
+    }
+  }
+  pushTabState();
+  void refreshHomeProjects();
+  return { ok: true };
 }
 
 function homeEntryForSender(sender) {
@@ -960,12 +1060,13 @@ function homeEntryForSender(sender) {
 }
 
 function openProjectInTab(entry, cwd) {
-  const base = String(cwd).split(/[\\/]/).filter(Boolean).pop();
-  entry.project = base;
+  const base = path.basename(cwd);
+  entry.project = projectDisplayName(cwd);
+  entry.cwd = cwd;
   entry.cwdBase = base;
   entry.url = `${homeUrl()}/?cwd=${encodeURIComponent(cwd)}`;
   entry.content.webContents.loadURL(entry.url);
-  if (entry.id === activeTabId) mainWindow.setTitle(`Pi Desktop - ${base} | Powered by Pi`);
+  if (entry.id === activeTabId) mainWindow.setTitle(`Pi Desktop - ${entry.project} | Powered by Pi`);
   pushTabState();
 }
 
@@ -1025,6 +1126,37 @@ ipcMain.on("app:home-browse", async (e) => {
   if (!r.canceled && r.filePaths[0] && homeEntryForSender(e.sender) === entry) {
     openProjectInTab(entry, r.filePaths[0]);
   }
+});
+ipcMain.handle("app:home-rename-project", (e, cwd, name) => {
+  if (!homeEntryForSender(e.sender) || typeof cwd !== "string" || !cwd) return { ok: false };
+  return renameProjectDisplay(cwd, name);
+});
+ipcMain.handle("app:tab-rename-project", (e, id, name) => {
+  if (!stripView || e.sender !== stripView.webContents) return { ok: false };
+  const entry = tabs.get(id);
+  if (!entry || !entry.cwd) return { ok: false };
+  return renameProjectDisplay(entry.cwd, name);
+});
+ipcMain.handle("app:home-move-project", async (e, sourceCwd, targetCwd, after) => {
+  if (!homeEntryForSender(e.sender)) return { ok: false };
+  const projects = await fetchProjects();
+  const order = projects.map((project) => projectKey(project.cwd));
+  const source = order.indexOf(projectKey(sourceCwd));
+  const target = order.indexOf(projectKey(targetCwd));
+  if (source < 0 || target < 0 || source === target) return { ok: false };
+  const [moved] = order.splice(source, 1);
+  order.splice(order.indexOf(projectKey(targetCwd)) + (after ? 1 : 0), 0, moved);
+  const preferences = getProjectPreferences();
+  const previous = preferences.order;
+  preferences.order = order;
+  try {
+    saveProjectPreferences();
+  } catch {
+    preferences.order = previous;
+    return { ok: false };
+  }
+  void refreshHomeProjects();
+  return { ok: true };
 });
 // 溢出面板事件
 ipcMain.on("app:overflow-switch", (e, id) => {

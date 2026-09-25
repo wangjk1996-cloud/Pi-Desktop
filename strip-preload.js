@@ -40,6 +40,49 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function wireTab(d, id) {
     d.addEventListener("click", () => ipcRenderer.send("app:switch-tab", id));
+    d.addEventListener("dblclick", (event) => {
+      if (d.dataset.canRename !== "true" || event.target.closest(".x,.rename-input")) return;
+      const label = d.querySelector(".label");
+      const input = document.createElement("input");
+      input.className = "rename-input";
+      input.value = label.textContent;
+      input.maxLength = 40;
+      input.setAttribute("aria-label", "项目显示名称");
+      d.insertBefore(input, d.querySelector(".x"));
+      d.classList.add("renaming");
+      input.focus();
+      input.select();
+      let finished = false;
+      async function finish(save) {
+        if (finished) return;
+        finished = true;
+        const next = input.value.trim();
+        if (save && next !== label.textContent) {
+          const result = await ipcRenderer.invoke("app:tab-rename-project", id, next);
+          if (!result?.ok) {
+            finished = false;
+            input.classList.add("invalid");
+            input.title = result?.message || "无法保存项目名称。";
+            input.focus();
+            return;
+          }
+        }
+        input.remove();
+        d.classList.remove("renaming");
+      }
+      input.addEventListener("click", (e) => e.stopPropagation());
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          void finish(true);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          void finish(false);
+        }
+      });
+      input.addEventListener("blur", () => { void finish(true); });
+    });
     d.addEventListener("keydown", (ev) => {
       if (ev.target !== d) return;
       if (ev.key === "Enter" || ev.key === " ") {
@@ -100,8 +143,10 @@ window.addEventListener("DOMContentLoaded", () => {
         wireTab(d, t.id);
       }
       // 只更新变化的属性
-      d.className = "tab" + (t.id === state.activeId ? " active" : "");
+      d.className = "tab" + (t.id === state.activeId ? " active" : "") + (d.querySelector(".rename-input") ? " renaming" : "");
       d.setAttribute("aria-selected", t.id === state.activeId ? "true" : "false");
+      d.dataset.canRename = t.canRename ? "true" : "false";
+      d.title = t.canRename ? "双击名称可重命名项目" : "";
       d.querySelector(".dot").className =
         "dot" + (t.status === "running" ? " running" : t.status === "unread" ? " unread" : "");
       const labelEl = d.querySelector(".label");
