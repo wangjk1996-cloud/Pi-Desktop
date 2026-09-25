@@ -748,8 +748,8 @@ function createMainWindow() {
     for (const t of tabs.values()) destroyTabContent(t);
     tabs.clear();
     activeTabId = null;
-    if (chooserView && !chooserView.webContents.isDestroyed()) chooserView.webContents.close();
-    chooserView = null;
+    if (chooserWin && !chooserWin.isDestroyed()) chooserWin.close();
+    chooserWin = null;
     chooserOpen = false;
     mainWindow = null;
     stripView = null;
@@ -772,27 +772,94 @@ function showMainWindow() {
 // ---------------------------------------------------------------------------
 // 项目选择面板: 点「+」弹出, 列出现有项目 + 新建项目; 选定后才开标签并直达项目
 // ---------------------------------------------------------------------------
-let chooserView = null;
+let chooserWin = null;
 let chooserOpen = false;
+
+function ensureChooser() {
+  if (chooserWin && !chooserWin.isDestroyed()) return chooserWin;
+  chooserWin = new BrowserWindow({
+    parent: mainWindow,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    show: false,
+    width: 380,
+    height: 300,
+    alwaysOnTop: false,
+    webPreferences: {
+      preload: path.join(__dirname, "chooser-preload.js"),
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  chooserWin.setMenu(null);
+  chooserWin.webContents.loadURL(chooserHtml());
+  chooserWin.on("blur", () => hideChooser());
+  return chooserWin;
+}
+
+function hideChooser() {
+  if (chooserWin && chooserOpen) {
+    chooserWin.hide();
+    chooserOpen = false;
+  }
+}
+
+// 先弹出面板(加载中), 再异步填充项目列表, 避免等待造成"卡死"感
+async function toggleChooser() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (chooserOpen) {
+    hideChooser();
+    return;
+  }
+  const w = ensureChooser();
+  const b = mainWindow.getBounds();
+  const rowsHint = 4;
+  w.setSize(380, 48 + rowsHint * 46 + 48);
+  w.setPosition(b.x + 10, b.y + STRIP_HEIGHT + 6);
+  w.show();
+  w.focus();
+  chooserOpen = true;
+  const wc = w.webContents;
+  const fill = async () => {
+    const projects = await fetchProjects();
+    if (wc.isDestroyed()) return;
+    const rows = Math.min(Math.max(projects.length, 1), 8);
+    w.setSize(380, 48 + rows * 46 + 48);
+    wc.send("app:projects", projects);
+  };
+  if (wc.isLoading()) wc.once("did-finish-load", fill);
+  else fill();
+}
 
 function chooserHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;background:transparent;font:13px "Segoe UI",sans-serif}
-#panel{background:#17171c;border:1px solid #2c2c34;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.5);
-  overflow:hidden;color:#dbe4f0}
-#head{padding:10px 14px;font-size:12px;color:#8fa3bf;border-bottom:1px solid #26262e}
-#list{max-height:320px;overflow-y:auto}
-.row{display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer}
+html,body{margin:0;height:100%;overflow:hidden;font:13px "Segoe UI","Microsoft YaHei",sans-serif}
+#panel{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;
+  background:#16161b;border:1px solid #2e2e38;border-radius:10px;overflow:hidden;color:#dbe4f0}
+#head{padding:11px 14px 9px;font-size:12px;letter-spacing:.04em;color:#8fa3bf;
+  border-bottom:1px solid #232329;display:flex;align-items:center;justify-content:space-between}
+#list{flex:1;overflow-y:auto;padding:6px}
+#list::-webkit-scrollbar{width:8px}
+#list::-webkit-scrollbar-thumb{background:#2e2e38;border-radius:4px}
+.row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer}
 .row:hover{background:#232329}
+.row:active{background:#2a2a31}
+.fic{width:30px;height:30px;min-width:30px;border-radius:8px;background:#232329;display:flex;
+  align-items:center;justify-content:center;color:#8fa3bf;font-size:15px}
 .row-main{flex:1;min-width:0}
 .name{font-size:13px;color:#e6edf7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cwd{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.count{font-size:11px;color:#64748b;background:#232329;border-radius:8px;padding:1px 8px}
-#new{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;color:#7cb3ff;
-  border-top:1px solid #26262e;font-size:13px}
+.cwd{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.count{font-size:11px;color:#8fa3bf;background:#26262e;border-radius:9px;padding:2px 9px}
+#new{display:flex;align-items:center;gap:10px;margin:6px;padding:9px 10px;border-radius:8px;
+  cursor:pointer;color:#7cb3ff;border-top:1px solid #232329;font-size:13px}
 #new:hover{background:#232329}
-.empty{padding:18px 14px;color:#64748b;text-align:center}
-</style></head><body><div id="panel"><div id="head">打开项目</div><div id="list"></div><div id="new">＋ 新建项目（选择目录）…</div></div></body></html>`;
+.empty{padding:20px;color:#64748b;text-align:center}
+.loading{padding:20px;color:#64748b;text-align:center}
+</style></head><body><div id="panel"><div id="head">打开项目</div><div id="list"><div class="loading">加载中…</div></div><div id="new">＋ 新建项目（选择目录）…</div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -813,45 +880,6 @@ async function fetchProjects() {
   } catch {
     return [];
   }
-}
-
-function ensureChooser() {
-  if (chooserView && !chooserView.webContents.isDestroyed()) return chooserView;
-  chooserView = new WebContentsView({
-    webPreferences: {
-      preload: path.join(__dirname, "chooser-preload.js"),
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
-  chooserView.setBackgroundColor("#00000000");
-  mainWindow.contentView.addChildView(chooserView);
-  chooserView.webContents.loadURL(chooserHtml());
-  chooserView.webContents.on("blur", () => hideChooser());
-  return chooserView;
-}
-
-function hideChooser() {
-  if (chooserView && chooserOpen) {
-    chooserView.setVisible(false);
-    chooserOpen = false;
-  }
-}
-
-async function toggleChooser() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (chooserOpen) {
-    hideChooser();
-    return;
-  }
-  const v = ensureChooser();
-  const projects = await fetchProjects();
-  const rows = Math.min(Math.max(projects.length, 1) + 1, 9);
-  v.setBounds({ x: 8, y: STRIP_HEIGHT + 2, width: 340, height: 42 + rows * 40 });
-  v.setVisible(true);
-  chooserOpen = true;
-  v.webContents.send("app:projects", projects);
-  v.webContents.focus();
 }
 
 function openProjectInNewTab(cwd) {
@@ -892,12 +920,12 @@ ipcMain.on("app:reorder-tab", (e, { dragId, targetId }) => {
 
 // 选择面板事件
 ipcMain.on("app:open-project", (e, cwd) => {
-  if (chooserView && e.sender === chooserView.webContents && typeof cwd === "string" && cwd) {
+  if (chooserWin && !chooserWin.isDestroyed() && e.sender === chooserWin.webContents && typeof cwd === "string" && cwd) {
     openProjectInNewTab(cwd);
   }
 });
 ipcMain.on("app:browse-project", async (e) => {
-  if (!chooserView || e.sender !== chooserView.webContents) return;
+  if (!chooserWin || chooserWin.isDestroyed() || e.sender !== chooserWin.webContents) return;
   const r = await dialog.showOpenDialog(mainWindow, {
     title: "选择项目目录",
     properties: ["openDirectory", "createDirectory"],
@@ -906,7 +934,7 @@ ipcMain.on("app:browse-project", async (e) => {
   else hideChooser();
 });
 ipcMain.on("app:close-chooser", (e) => {
-  if (chooserView && e.sender === chooserView.webContents) hideChooser();
+  if (chooserWin && !chooserWin.isDestroyed() && e.sender === chooserWin.webContents) hideChooser();
 });
 
 function createTray() {

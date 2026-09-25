@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop-app",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Pi Desktop — pi coding agent 的桌面客户端, 内核(pi/pi-web)自动更新",
   "author": "wangjk1996-cloud",
   "license": "MIT",
