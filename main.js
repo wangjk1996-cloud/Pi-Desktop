@@ -574,7 +574,14 @@ function switchTab(id) {
   const prev = tabs.get(activeTabId);
   if (prev && prev.id !== id) {
     prev.lastSeen = Date.now();
-    destroyTabContent(prev); // 后台标签彻底销毁: 内存与 CPU 零占用, 切换时重新加载(本地服务, 约 1 秒)
+    // 后台标签只从窗口卸下, 不销毁: 切回瞬时无刷新, 页面状态完整保留
+    try {
+      if (prev.content && !prev.content.webContents.isDestroyed()) {
+        mainWindow.contentView.removeChildView(prev.content);
+      }
+    } catch {
+      /* ignore */
+    }
   }
   activeTabId = id;
   const t = tabs.get(id);
@@ -625,16 +632,17 @@ function wireContentEvents(entry) {
         if (cwd) entry.cwdBase = String(cwd).split(/[\\/]/).filter(Boolean).pop();
       })
       .catch(() => {});
-    // 新建的标签页(+号打开): 自动展开项目选择器, 直接选项目
+    // 新建的标签页(+号打开): pi-web 会自动跳进最近会话, 检测到后点 logo 退回首页(会话列表)
     if (entry.fresh) {
       entry.fresh = false;
       content.webContents
         .executeJavaScript(
-          `(() => { const tryOpen = (n) => {
-              const b = [...document.querySelectorAll("button")].find((x) => /[A-Za-z]:\\\\/.test(x.textContent || ""));
-              if (b) { b.click(); return; }
-              if (n > 0) setTimeout(() => tryOpen(n - 1), 500);
-            }; tryOpen(16); })()`
+          `(() => { const tryHome = (n) => {
+              const hasComposer = !!document.querySelector("textarea");
+              const logo = [...document.querySelectorAll("button")].find((x) => (x.textContent || "").trim() === "Pi Web");
+              if (hasComposer && logo) { logo.click(); return; }
+              if (n > 0) setTimeout(() => tryHome(n - 1), 400);
+            }; tryHome(25); })()`
         )
         .catch(() => {});
     }
