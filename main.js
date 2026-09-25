@@ -487,8 +487,10 @@ html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#101010}
   background:transparent;color:#dbe4f0;font-size:16px;cursor:pointer;line-height:1}
 #add:hover{background:rgba(255,255,255,.12)}
 #add:disabled{opacity:.3;cursor:default}
-#tabs{order:1;display:flex;align-items:center;gap:6px;overflow:hidden}
-.tab{-webkit-app-region:no-drag;display:flex;align-items:center;gap:7px;width:150px;min-width:150px;
+#tabs{order:1;display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0;
+  overflow-x:auto;scrollbar-width:none}
+#tabs::-webkit-scrollbar{display:none}
+.tab{-webkit-app-region:no-drag;display:flex;align-items:center;gap:7px;flex:0 1 150px;min-width:76px;
   padding:5px 8px;border-radius:8px;background:#1c1c22;color:#9aa4b2;cursor:pointer;white-space:nowrap;box-sizing:border-box}
 .tab.active{background:#2c2c34;color:#ffffff}
 .tab .label{flex:1;overflow:hidden;text-overflow:ellipsis}
@@ -692,7 +694,16 @@ function newTab(url, cwdBase) {
     running: false,
     lastSeen: Date.now(),
   };
-  tabs.set(id, entry);
+  // 插在当前标签右侧(Chrome 行为)
+  if (activeTabId && tabs.has(activeTabId)) {
+    const entries = [...tabs.entries()];
+    const idx = entries.findIndex(([k]) => k === activeTabId);
+    entries.splice(idx + 1, 0, [id, entry]);
+    tabs.clear();
+    for (const [k, v] of entries) tabs.set(k, v);
+  } else {
+    tabs.set(id, entry);
+  }
   switchTab(id);
 }
 
