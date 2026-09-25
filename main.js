@@ -542,20 +542,44 @@ function layoutWindow() {
   if (active) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
 }
 
+function destroyTabContent(entry) {
+  if (!entry.content) return;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.contentView.removeChildView(entry.content);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    entry.content.webContents.close();
+  } catch {
+    /* ignore */
+  }
+  entry.content = null;
+}
+
+function ensureTabContent(entry) {
+  if (entry.content && !entry.content.webContents.isDestroyed()) return;
+  const content = new WebContentsView({
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+  });
+  entry.content = content;
+  wireContentEvents(entry);
+  content.webContents.loadURL(entry.url);
+}
+
 function switchTab(id) {
   if (!tabs.has(id) || !mainWindow || mainWindow.isDestroyed()) return;
-  // 非活动标签整体从窗口卸下(页面状态保留在后台), 不参与绘制, 保证流畅
   const prev = tabs.get(activeTabId);
   if (prev && prev.id !== id) {
-    try {
-      mainWindow.contentView.removeChildView(prev.content);
-    } catch {
-      /* ignore */
-    }
+    prev.lastSeen = Date.now();
+    destroyTabContent(prev); // 后台标签彻底销毁: 内存与 CPU 零占用, 切换时重新加载(本地服务, 约 1 秒)
   }
   activeTabId = id;
   const t = tabs.get(id);
   t.unread = false; // 切到该标签即视为已读
+  ensureTabContent(t);
   try {
     mainWindow.contentView.addChildView(t.content);
   } catch {
@@ -591,14 +615,26 @@ function wireContentEvents(entry) {
 
   // 内容加载后同步标签条/原生按钮配色, 与 pi-web 顶栏协调
   content.webContents.on("did-finish-load", async () => {
-    // 新建的标签页(+号打开): 自动进入 pi-web 的新会话页, 与应用默认首页一致
+    // 抓取项目路径按钮文本, 提取项目目录名(供状态轮询匹配)
+    content.webContents
+      .executeJavaScript(
+        `(() => { const b = [...document.querySelectorAll("button")].find((x) => /[A-Za-z]:\\\\/.test(x.textContent || ""));
+          return b ? b.textContent.trim() : ""; })()`
+      )
+      .then((cwd) => {
+        if (cwd) entry.cwdBase = String(cwd).split(/[\\/]/).filter(Boolean).pop();
+      })
+      .catch(() => {});
+    // 新建的标签页(+号打开): 自动展开项目选择器, 直接选项目
     if (entry.fresh) {
       entry.fresh = false;
       content.webContents
         .executeJavaScript(
-          `(() => { const els = [...document.querySelectorAll("button, a")];
-            const b = els.find((x) => /new session|新会话/i.test(x.textContent || ""));
-            if (b) b.click(); })()`
+          `(() => { const tryOpen = (n) => {
+              const b = [...document.querySelectorAll("button")].find((x) => /[A-Za-z]:\\\\/.test(x.textContent || ""));
+              if (b) { b.click(); return; }
+              if (n > 0) setTimeout(() => tryOpen(n - 1), 500);
+            }; tryOpen(16); })()`
         )
         .catch(() => {});
     }
@@ -645,26 +681,32 @@ function wireContentEvents(entry) {
 function newTab(url) {
   if (tabs.size >= MAX_TABS || !mainWindow || mainWindow.isDestroyed()) return;
   const id = ++tabSeq;
-  const content = new WebContentsView({
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
-  });
-  mainWindow.contentView.addChildView(content);
-  const entry = { id, content, url: url || homeUrl(), project: "", fresh: tabs.size > 0 };
+  const entry = {
+    id,
+    content: null, // 后台标签不持有页面实例, 激活时才创建
+    url: url || homeUrl(),
+    project: "",
+    cwdBase: "",
+    unread: false,
+    running: false,
+    lastSeen: Date.now(),
+    fresh: tabs.size > 0, // 首个标签展示应用默认页; +号新建的展开项目选择器
+  };
   tabs.set(id, entry);
-  wireContentEvents(entry);
-  content.webContents.loadURL(entry.url);
-  layoutWindow();
   switchTab(id);
 }
 
 function closeTab(id) {
   const entry = tabs.get(id);
   if (!entry || tabs.size <= 1 || !mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.contentView.removeChildView(entry.content);
-  entry.content.webContents.close();
+  destroyTabContent(entry);
   tabs.delete(id);
-  if (activeTabId === id) switchTab([...tabs.keys()][tabs.size - 1]);
-  else pushTabState();
+  if (activeTabId === id) {
+    activeTabId = null;
+    switchTab([...tabs.keys()][tabs.size - 1]);
+  } else {
+    pushTabState();
+  }
 }
 
 function createMainWindow() {
@@ -703,7 +745,7 @@ function createMainWindow() {
     }
   });
   mainWindow.on("closed", () => {
-    for (const t of tabs.values()) t.content.webContents.close();
+    for (const t of tabs.values()) destroyTabContent(t);
     tabs.clear();
     activeTabId = null;
     mainWindow = null;
@@ -821,8 +863,8 @@ function startWatchdog() {
       serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
       await startServer(serverPort);
       for (const entry of tabs.values()) {
-        if (!entry.content.webContents.isDestroyed()) {
-          entry.url = `http://${APP_URL_HOST}:${serverPort}`;
+        entry.url = `http://${APP_URL_HOST}:${serverPort}`;
+        if (entry.content && !entry.content.webContents.isDestroyed()) {
           entry.content.webContents.loadURL(entry.url);
         }
       }
@@ -832,34 +874,49 @@ function startWatchdog() {
   }, 5000);
 }
 
-// 标签状态轮询: 运行中(页面出现旋转指示/停止按钮) -> 旋转圈;
-// 后台标签从运行转为空闲 -> 蓝点(已完成未读); 其余 -> 灰点
+// 标签状态轮询: 主进程直接查 pi-web API(不触碰页面, 零渲染开销)
+// 运行中(该标签项目下有会话在跑) -> 旋转圈; 后台标签项目有新动态 -> 蓝点; 其余 -> 灰点
 let statusTimer = null;
 function startStatusPoller() {
   statusTimer = setInterval(async () => {
-    if (quitting) return;
-    let changed = false;
-    for (const entry of tabs.values()) {
-      if (entry.content.webContents.isDestroyed()) continue;
-      try {
-        const running = await entry.content.webContents.executeJavaScript(
-          `(() => {
-            if (document.querySelector('[class*="animate-spin"]')) return true;
-            const bs = [...document.querySelectorAll("button")];
-            return bs.some((b) => /^(stop|停止)$/i.test((b.textContent || "").trim()));
-          })()`
-        );
-        const v = !!running;
-        if (v !== !!entry.running) {
-          if (entry.running && !v && entry.id !== activeTabId) entry.unread = true;
-          entry.running = v;
+    if (quitting || !tabs.size) return;
+    try {
+      const res = await fetch(`http://${APP_URL_HOST}:${serverPort}/api/sessions`);
+      const data = await res.json();
+      const runningIds = new Set(data.runningSessionIds || []);
+      const baseName = (cwd) => String(cwd || "").split(/[\\/]/).filter(Boolean).pop();
+      const runningCwds = new Set();
+      for (const s of data.sessions || []) {
+        if (runningIds.has(s.id)) runningCwds.add(baseName(s.cwd));
+      }
+      const now = Date.now();
+      let changed = false;
+      for (const entry of tabs.values()) {
+        if (!entry.cwdBase) continue;
+        const running = runningCwds.has(entry.cwdBase);
+        if (running !== !!entry.running) {
+          if (entry.running && !running && entry.id !== activeTabId) entry.unread = true;
+          entry.running = running;
           changed = true;
         }
-      } catch {
-        /* ignore */
+        // 后台标签的项目下有会话内容更新 -> 未读蓝点
+        if (entry.id !== activeTabId && !entry.unread) {
+          const latest = Math.max(
+            0,
+            ...(data.sessions || [])
+              .filter((s) => baseName(s.cwd) === entry.cwdBase)
+              .map((s) => Date.parse(s.modified) || 0)
+          );
+          if (latest > entry.lastSeen) {
+            entry.unread = true;
+            changed = true;
+          }
+        }
       }
+      if (changed) pushTabState();
+    } catch {
+      /* 服务暂不可达时跳过本轮 */
     }
-    if (changed) pushTabState();
   }, 3000);
 }
 
