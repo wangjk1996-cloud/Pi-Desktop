@@ -139,14 +139,23 @@ window.addEventListener("DOMContentLoaded", () => {
       rename.title = "重命名项目显示名称";
       rename.setAttribute("aria-label", `重命名 ${project.name}`);
       rename.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.5-1 10.8-10.8a2 2 0 0 0-2.8-2.8L5.7 16.2 4 20Z"/><path d="m14.8 6.9 2.8 2.8"/></svg>';
+      const remove = document.createElement("button");
+      remove.className = "remove";
+      remove.title = "从最近项目移除（不会删除目录或会话）";
+      remove.setAttribute("aria-label", `从最近项目移除 ${project.name}`);
+      remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9 7V4.5h6V7m-8.5 0 .8 12h9.4l.8-12M10 10.5v5.5m4-5.5v5.5"/></svg>';
       details.append(name, cwd);
-      row.append(grip, folder, details, count, rename);
+      row.append(grip, folder, details, count, rename, remove);
       rename.addEventListener("click", (event) => {
         event.stopPropagation();
         beginRename(project, name);
       });
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void ipcRenderer.invoke("app:home-remove-project", project.cwd);
+      });
       row.addEventListener("click", (event) => {
-        if (Date.now() < ignoreClicksUntil || event.target.closest(".rename,.name-editor")) return;
+        if (Date.now() < ignoreClicksUntil || event.target.closest(".rename,.remove,.name-editor")) return;
         ipcRenderer.send("app:home-open-project", project.cwd);
       });
       row.addEventListener("keydown", (event) => {

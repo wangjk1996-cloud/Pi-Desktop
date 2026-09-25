@@ -97,9 +97,10 @@ function getProjectPreferences() {
       names: saved.names && typeof saved.names === "object" ? saved.names : {},
       order: Array.isArray(saved.order) ? saved.order : [],
       opened: Array.isArray(saved.opened) ? saved.opened : [],
+      hidden: Array.isArray(saved.hidden) ? saved.hidden : [],
     };
   } catch {
-    projectPreferences = { names: {}, order: [], opened: [] };
+    projectPreferences = { names: {}, order: [], opened: [], hidden: [] };
   }
   return projectPreferences;
 }
@@ -114,6 +115,7 @@ function recordOpenedProject(cwd) {
   const key = projectKey(cwd);
   preferences.opened = preferences.opened.filter((item) => item && typeof item.cwd === "string" && projectKey(item.cwd) !== key);
   preferences.opened.unshift({ cwd, last: Date.now() });
+  preferences.hidden = preferences.hidden.filter((item) => item !== key);
   try {
     saveProjectPreferences();
   } catch {
@@ -531,9 +533,9 @@ main{width:min(100%,840px);height:100%;min-height:0;margin:0 auto;display:flex;f
 h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .intro{font-size:14px;line-height:1.7;color:#9da6b5;margin:0}
 #browse{display:inline-flex;align-items:center;gap:8px;height:40px;margin-top:28px;padding:0 12px;
-  border:1px solid #c4d0e8;border-radius:10px;background:#dce6f8;color:#1b2940;
-  cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .12s,border-color .12s}
-#browse:hover{background:#eef3fd;border-color:#eef3fd}
+  border:1px solid transparent;border-radius:10px;background:#dce6f8;color:#1b2940;
+  box-shadow:inset 0 0 0 1px #c4d0e8;cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .12s,box-shadow .12s}
+#browse:hover{background:#eef3fd;box-shadow:inset 0 0 0 1px #eef3fd}
 #browse:focus-visible,.project:focus-visible{outline:2px solid #8eafe8;outline-offset:2px}
 #browse svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .recent{display:flex;flex:1;flex-direction:column;min-height:0;margin-top:30px}
@@ -544,7 +546,7 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 #projects::-webkit-scrollbar{width:6px}
 #projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
 .project{display:flex;align-items:center;gap:15px;width:100%;min-height:90px;padding:10px 13px;margin-top:7px;
-  box-sizing:border-box;border:1px solid #2a2e36;border-radius:10px;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
+  box-sizing:border-box;border:1px solid transparent;border-radius:10px;box-shadow:inset 0 0 0 1px #2a2e36;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
 .project:hover{background:#2b3039}
 .project.dragging{opacity:.45}
 .project.drop-before{box-shadow:inset 0 2px #8eafe8}
@@ -556,10 +558,11 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .name{font-size:15px;font-weight:700}.cwd{font-size:12px;color:#8f98a8;margin-top:5px}
 .count{flex:none;font-size:11px;color:#858e9d}
-.rename{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;padding:0;border:0;border-radius:8px;
+.rename,.remove{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;padding:0;border:0;border-radius:8px;
   background:transparent;color:#aeb7c5;cursor:pointer;opacity:.6}
-.rename:hover,.rename:focus-visible{background:#39404c;color:#fff;opacity:1;outline:none}
-.rename svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.remove{margin-left:-11px}
+.rename:hover,.rename:focus-visible,.remove:hover,.remove:focus-visible{background:#39404c;color:#fff;opacity:1;outline:none}
+.rename svg,.remove svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .name-editor{min-width:0;width:min(100%,280px);height:27px;box-sizing:border-box;padding:2px 6px;margin:-3px 0;
   border:1px solid #8eafe8;border-radius:5px;outline:none;background:#171b22;color:#fff;font:700 15px "Segoe UI","Microsoft YaHei",sans-serif}
 .name-editor.invalid{border-color:#ef8888}
@@ -583,15 +586,16 @@ svg{shape-rendering:geometricPrecision}
   background:#22242a;color:#aeb4c0;cursor:pointer;white-space:nowrap;box-sizing:border-box;
   transition:background .12s,border-color .12s}
 .tab:hover{background:#2b2e36;color:#f0f2f6}
-.tab.active{background:#353944;border-color:#4c5260;color:#fff}
+.tab.active{background:#353944;box-shadow:inset 0 0 0 1px #4c5260;color:#fff}
 .tab:focus-visible,#add:focus-visible,.nav:focus-visible{outline:2px solid #7eaeff;outline-offset:-2px}
 .tab .label{flex:1;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 .tab.renaming .label{display:none}
 .rename-input{flex:1;min-width:0;height:22px;padding:0 4px;border:1px solid #8eafe8;border-radius:4px;
   outline:none;background:#171b22;color:#fff;font:600 13px "Segoe UI","Microsoft YaHei",sans-serif}
 .rename-input.invalid{border-color:#ef8888}
-.tab .x{border:none;background:transparent;color:inherit;font-size:16px;cursor:pointer;border-radius:4px;
-  width:19px;height:19px;padding:0;opacity:.65;line-height:17px}
+.tab .x{display:grid;place-items:center;border:none;background:transparent;color:inherit;cursor:pointer;border-radius:6px;
+  width:19px;height:19px;padding:0;opacity:.65}
+.tab .x svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
 .tab .x:hover{background:rgba(255,255,255,.16);opacity:1}
 .tab.dragover{outline:1px dashed #3b82f6;outline-offset:-1px}
 .dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:#6b7280}
@@ -600,23 +604,23 @@ svg{shape-rendering:geometricPrecision}
   border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
 #add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:9px;
   background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0}
-#add{font-size:20px;font-weight:300;line-height:1}
+#add svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
 .nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;
   stroke-linecap:round;stroke-linejoin:round}
 #add:hover,.nav:hover{background:#30343d;color:#fff}
 .nav:disabled{opacity:.3;cursor:default;background:transparent}
 #nav{display:none;align-items:center;gap:2px;margin-left:3px;-webkit-app-region:no-drag}
 #bar.overflow #nav{display:flex}
-#all{margin-left:2px;background:#2c3039;border:1px solid #444a56}
+#all{margin-left:2px;background:#2c3039;border:1px solid transparent;box-shadow:inset 0 0 0 1px #444a56}
 #bar.light .tab{background:#e9ebef;color:#555f6c}
 #bar.light .tab:hover{background:#dde1e8;color:#1f2328}
-#bar.light .tab.active{background:#fff;border-color:#c6cdd7;color:#1f2328}
+#bar.light .tab.active{background:#fff;box-shadow:inset 0 0 0 1px #c6cdd7;color:#1f2328}
 #bar.light .tab .x:hover{background:#d9dee6}
 #bar.light #add,#bar.light .nav{color:#4c5665}
 #bar.light #add:hover,#bar.light .nav:hover{background:#dce2e9;color:#1f2328}
-#bar.light #all{background:#e9ebef;border-color:#c6cdd7}
+#bar.light #all{background:#e9ebef;box-shadow:inset 0 0 0 1px #c6cdd7}
 @keyframes spin{to{transform:rotate(360deg)}}
-</style></head><body><div id="bar"><div id="tabs" role="tablist"></div><button id="add" title="新建标签页" aria-label="新建标签页">+</button><div id="nav"><button class="nav" id="left" title="向左滚动标签页" aria-label="向左滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button><button class="nav" id="right" title="向右滚动标签页" aria-label="向右滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button class="nav" id="all" title="全部标签页" aria-label="全部标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div></div></body></html>`;
+</style></head><body><div id="bar"><div id="tabs" role="tablist"></div><button id="add" title="新建标签页" aria-label="新建标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><div id="nav"><button class="nav" id="left" title="向左滚动标签页" aria-label="向左滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button><button class="nav" id="right" title="向右滚动标签页" aria-label="向右滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button class="nav" id="all" title="全部标签页" aria-label="全部标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -994,8 +998,8 @@ function overflowHtml() {
 html,body{margin:0;height:100%;overflow:hidden;font:13px "Segoe UI","Microsoft YaHei",sans-serif;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}
 svg{shape-rendering:geometricPrecision}
 #panel{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;
-  background:#1b1d23;border:1px solid #3b404a;border-radius:12px;overflow:hidden;color:#e8ebf0;
-  box-shadow:0 12px 30px rgba(0,0,0,.38)}
+  background:#1b1d23;border:1px solid transparent;border-radius:12px;overflow:hidden;color:#e8ebf0;
+  box-shadow:inset 0 0 0 1px #3b404a,0 12px 30px rgba(0,0,0,.38)}
 #head{padding:15px 16px 9px;font-size:12px;font-weight:600;color:#c7ccd6}
 #list{flex:1;overflow-y:auto;scrollbar-width:none;padding:3px 7px 8px}
 #list::-webkit-scrollbar{display:none}
@@ -1015,18 +1019,21 @@ svg{shape-rendering:geometricPrecision}
 // pi-web 会话与 Pi Desktop 打开过的目录合并；无会话的新项目也立即出现在首页
 function projectsFromSessions(data) {
   const byCwd = new Map();
+  const preferences = getProjectPreferences();
+  const hidden = new Set(preferences.hidden);
   for (const session of data.sessions || []) {
     if (!session.cwd) continue;
     const key = projectKey(session.cwd);
+    if (hidden.has(key)) continue;
     const project = byCwd.get(key) || { cwd: session.cwd, name: projectDisplayName(session.cwd), count: 0, last: 0 };
     project.count += 1;
     project.last = Math.max(project.last, Date.parse(session.modified) || 0);
     byCwd.set(key, project);
   }
-  const preferences = getProjectPreferences();
   for (const item of preferences.opened) {
     if (!item || typeof item.cwd !== "string") continue;
     const key = projectKey(item.cwd);
+    if (hidden.has(key)) continue;
     const project = byCwd.get(key) || { cwd: item.cwd, name: projectDisplayName(item.cwd), count: 0, last: 0 };
     project.last = Math.max(project.last, Number(item.last) || 0);
     byCwd.set(key, project);
@@ -1163,6 +1170,24 @@ ipcMain.on("app:home-browse", async (e) => {
 ipcMain.handle("app:home-rename-project", (e, cwd, name) => {
   if (!homeEntryForSender(e.sender) || typeof cwd !== "string" || !cwd) return { ok: false };
   return renameProjectDisplay(cwd, name);
+});
+ipcMain.handle("app:home-remove-project", (e, cwd) => {
+  if (!homeEntryForSender(e.sender) || typeof cwd !== "string" || !cwd) return { ok: false };
+  const preferences = getProjectPreferences();
+  const key = projectKey(cwd);
+  const previousOpened = preferences.opened;
+  const previousHidden = preferences.hidden;
+  preferences.opened = preferences.opened.filter((item) => item && typeof item.cwd === "string" && projectKey(item.cwd) !== key);
+  preferences.hidden = [...preferences.hidden.filter((item) => item !== key), key];
+  try {
+    saveProjectPreferences();
+  } catch {
+    preferences.opened = previousOpened;
+    preferences.hidden = previousHidden;
+    return { ok: false };
+  }
+  void refreshHomeProjects();
+  return { ok: true };
 });
 ipcMain.handle("app:tab-rename-project", (e, id, name) => {
   if (!stripView || e.sender !== stripView.webContents) return { ok: false };

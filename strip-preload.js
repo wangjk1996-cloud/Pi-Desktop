@@ -135,7 +135,7 @@ window.addEventListener("DOMContentLoaded", () => {
         label.className = "label";
         const x = document.createElement("button");
         x.className = "x";
-        x.textContent = "×";
+        x.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5 12.5 12.5M12.5 3.5 3.5 12.5"/></svg>';
         x.setAttribute("aria-label", "关闭标签页");
         d.appendChild(dot);
         d.appendChild(label);
