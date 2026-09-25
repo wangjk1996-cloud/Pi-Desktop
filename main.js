@@ -96,9 +96,10 @@ function getProjectPreferences() {
     projectPreferences = {
       names: saved.names && typeof saved.names === "object" ? saved.names : {},
       order: Array.isArray(saved.order) ? saved.order : [],
+      opened: Array.isArray(saved.opened) ? saved.opened : [],
     };
   } catch {
-    projectPreferences = { names: {}, order: [] };
+    projectPreferences = { names: {}, order: [], opened: [] };
   }
   return projectPreferences;
 }
@@ -107,6 +108,18 @@ function saveProjectPreferences() {
 }
 function projectDisplayName(cwd) {
   return getProjectPreferences().names[projectKey(cwd)] || path.basename(cwd);
+}
+function recordOpenedProject(cwd) {
+  const preferences = getProjectPreferences();
+  const key = projectKey(cwd);
+  preferences.opened = preferences.opened.filter((item) => item && typeof item.cwd === "string" && projectKey(item.cwd) !== key);
+  preferences.opened.unshift({ cwd, last: Date.now() });
+  try {
+    saveProjectPreferences();
+  } catch {
+    /* 最近项目仍保留在本次运行的内存中 */
+  }
+  void refreshHomeProjects();
 }
 
 let tray = null;
@@ -508,7 +521,8 @@ function homeUrl() {
 
 function tabHomeUrl() {
   const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;overflow:hidden;background:#1b1d22;color:#eff1f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+html,body{margin:0;height:100%;overflow:hidden;background:#1b1d22;color:#eff1f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}
+svg{shape-rendering:geometricPrecision}
 body{box-sizing:border-box;padding:clamp(64px,18vh,148px) 32px 24px}
 main{width:min(100%,840px);height:100%;min-height:0;margin:0 auto;display:flex;flex-direction:column}
 .brand{display:flex;align-items:center;gap:18px;flex:none;color:#f2f3f6;font:700 58px/1 "Times New Roman",serif;letter-spacing:.027em}
@@ -517,7 +531,7 @@ main{width:min(100%,840px);height:100%;min-height:0;margin:0 auto;display:flex;f
 h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .intro{font-size:14px;line-height:1.7;color:#9da6b5;margin:0}
 #browse{display:inline-flex;align-items:center;gap:8px;height:40px;margin-top:28px;padding:0 12px;
-  border:1px solid #c4d0e8;border-radius:8px;background:#dce6f8;color:#1b2940;
+  border:1px solid #c4d0e8;border-radius:10px;background:#dce6f8;color:#1b2940;
   cursor:pointer;font:700 16px "Microsoft YaHei UI","Microsoft YaHei",sans-serif;transition:background .12s,border-color .12s}
 #browse:hover{background:#eef3fd;border-color:#eef3fd}
 #browse:focus-visible,.project:focus-visible{outline:2px solid #8eafe8;outline-offset:2px}
@@ -530,7 +544,7 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 #projects::-webkit-scrollbar{width:6px}
 #projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
 .project{display:flex;align-items:center;gap:15px;width:100%;min-height:90px;padding:10px 13px;margin-top:7px;
-  box-sizing:border-box;border:1px solid #2a2e36;border-radius:8px;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
+  box-sizing:border-box;border:1px solid #2a2e36;border-radius:10px;background:#22252b;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
 .project:hover{background:#2b3039}
 .project.dragging{opacity:.45}
 .project.drop-before{box-shadow:inset 0 2px #8eafe8}
@@ -542,7 +556,7 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 .details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .name{font-size:15px;font-weight:700}.cwd{font-size:12px;color:#8f98a8;margin-top:5px}
 .count{flex:none;font-size:11px;color:#858e9d}
-.rename{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;padding:0;border:0;border-radius:6px;
+.rename{display:grid;place-items:center;flex:0 0 27px;width:27px;height:27px;padding:0;border:0;border-radius:8px;
   background:transparent;color:#aeb7c5;cursor:pointer;opacity:.6}
 .rename:hover,.rename:focus-visible{background:#39404c;color:#fff;opacity:1;outline:none}
 .rename svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
@@ -557,14 +571,15 @@ h1{font:500 28px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
 
 function stripHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#15161a}
+html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#15161a;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}
+svg{shape-rendering:geometricPrecision}
 #bar{display:flex;align-items:center;gap:5px;height:${STRIP_HEIGHT}px;padding:0 146px 0 9px;
   box-sizing:border-box;-webkit-app-region:drag;color:#d9dce3;font:14px "Segoe UI","Microsoft YaHei",sans-serif;user-select:none}
 #tabs{display:flex;align-items:center;gap:5px;flex:0 1 auto;min-width:0;height:100%;
   overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-app-region:no-drag}
 #tabs::-webkit-scrollbar{display:none}
 .tab{display:flex;align-items:center;gap:7px;flex:0 0 148px;width:148px;height:29px;
-  padding:0 8px 0 10px;border:1px solid transparent;border-radius:7px;
+  padding:0 8px 0 10px;border:1px solid transparent;border-radius:9px;
   background:#22242a;color:#aeb4c0;cursor:pointer;white-space:nowrap;box-sizing:border-box;
   transition:background .12s,border-color .12s}
 .tab:hover{background:#2b2e36;color:#f0f2f6}
@@ -583,7 +598,7 @@ html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#15161a}
 .dot.unread{background:#3b82f6}
 .dot.running{width:10px;height:10px;min-width:10px;background:transparent;
   border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
-#add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:7px;
+#add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:9px;
   background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0}
 #add{font-size:20px;font-weight:300;line-height:1}
 .nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;
@@ -714,6 +729,7 @@ function switchTab(id) {
     `Pi Desktop - ${t.project || "首页"} | Powered by Pi`
   );
   pushTabState();
+  if (t.url.startsWith("data:text/html")) void refreshHomeProjects();
 }
 
 function wireContentEvents(entry) {
@@ -745,6 +761,7 @@ function wireContentEvents(entry) {
         entry.cwdBase = path.basename(cwd);
         entry.project = projectDisplayName(cwd);
         pushTabState();
+        recordOpenedProject(cwd);
       }
     } catch {
       /* 首页 data URL 不含项目路径 */
@@ -974,15 +991,16 @@ function toggleOverflow(anchorRight) {
 
 function overflowHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;overflow:hidden;font:13px "Segoe UI","Microsoft YaHei",sans-serif}
+html,body{margin:0;height:100%;overflow:hidden;font:13px "Segoe UI","Microsoft YaHei",sans-serif;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased}
+svg{shape-rendering:geometricPrecision}
 #panel{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;
-  background:#1b1d23;border:1px solid #3b404a;border-radius:11px;overflow:hidden;color:#e8ebf0;
+  background:#1b1d23;border:1px solid #3b404a;border-radius:12px;overflow:hidden;color:#e8ebf0;
   box-shadow:0 12px 30px rgba(0,0,0,.38)}
 #head{padding:15px 16px 9px;font-size:12px;font-weight:600;color:#c7ccd6}
 #list{flex:1;overflow-y:auto;scrollbar-width:none;padding:3px 7px 8px}
 #list::-webkit-scrollbar{display:none}
 .row{display:flex;align-items:center;gap:10px;width:100%;height:42px;padding:0 11px;border:0;
-  border-radius:7px;background:transparent;color:#dce1e9;text-align:left;cursor:pointer;font:inherit}
+  border-radius:9px;background:transparent;color:#dce1e9;text-align:left;cursor:pointer;font:inherit}
 .row:hover,.row:focus-visible{background:#30343d;outline:none}
 .row.active{background:#2e3440;color:#fff}
 .num{color:#7f8998;font-size:11px;width:18px;flex:0 0 18px}
@@ -994,37 +1012,51 @@ html,body{margin:0;height:100%;overflow:hidden;font:13px "Segoe UI","Microsoft Y
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
-// 从 pi-web API 汇总项目列表(按会话目录去重, 最近活跃的排前面)
+// pi-web 会话与 Pi Desktop 打开过的目录合并；无会话的新项目也立即出现在首页
+function projectsFromSessions(data) {
+  const byCwd = new Map();
+  for (const session of data.sessions || []) {
+    if (!session.cwd) continue;
+    const key = projectKey(session.cwd);
+    const project = byCwd.get(key) || { cwd: session.cwd, name: projectDisplayName(session.cwd), count: 0, last: 0 };
+    project.count += 1;
+    project.last = Math.max(project.last, Date.parse(session.modified) || 0);
+    byCwd.set(key, project);
+  }
+  const preferences = getProjectPreferences();
+  for (const item of preferences.opened) {
+    if (!item || typeof item.cwd !== "string") continue;
+    const key = projectKey(item.cwd);
+    const project = byCwd.get(key) || { cwd: item.cwd, name: projectDisplayName(item.cwd), count: 0, last: 0 };
+    project.last = Math.max(project.last, Number(item.last) || 0);
+    byCwd.set(key, project);
+  }
+  const ranks = new Map(preferences.order.map((key, index) => [key, index]));
+  return [...byCwd.values()].sort((a, b) => {
+    const aRank = ranks.get(projectKey(a.cwd)) ?? Infinity;
+    const bRank = ranks.get(projectKey(b.cwd)) ?? Infinity;
+    return aRank - bRank || b.last - a.last;
+  });
+}
+
 async function fetchProjects() {
   try {
     const res = await fetch(`http://${APP_URL_HOST}:${serverPort}/api/sessions`);
-    const data = await res.json();
-    const byCwd = new Map();
-    for (const s of data.sessions || []) {
-      if (!s.cwd) continue;
-      const cur = byCwd.get(s.cwd) || { cwd: s.cwd, name: projectDisplayName(s.cwd), count: 0, last: 0 };
-      cur.count += 1;
-      cur.last = Math.max(cur.last, Date.parse(s.modified) || 0);
-      byCwd.set(s.cwd, cur);
-    }
-    const ranks = new Map(getProjectPreferences().order.map((key, index) => [key, index]));
-    return [...byCwd.values()].sort((a, b) => {
-      const aRank = ranks.get(projectKey(a.cwd)) ?? Infinity;
-      const bRank = ranks.get(projectKey(b.cwd)) ?? Infinity;
-      return aRank - bRank || b.last - a.last;
-    });
+    return projectsFromSessions(await res.json());
   } catch {
-    return [];
+    return projectsFromSessions({ sessions: [] });
   }
 }
 
-async function refreshHomeProjects() {
-  const projects = await fetchProjects();
+function sendHomeProjects(projects) {
   for (const entry of tabs.values()) {
     if (entry.url.startsWith("data:text/html") && entry.content && !entry.content.webContents.isDestroyed()) {
       entry.content.webContents.send("app:home-projects", projects);
     }
   }
+}
+async function refreshHomeProjects() {
+  sendHomeProjects(await fetchProjects());
 }
 
 function renameProjectDisplay(cwd, name) {
@@ -1068,6 +1100,7 @@ function openProjectInTab(entry, cwd) {
   entry.content.webContents.loadURL(entry.url);
   if (entry.id === activeTabId) mainWindow.setTitle(`Pi Desktop - ${entry.project} | Powered by Pi`);
   pushTabState();
+  recordOpenedProject(cwd);
 }
 
 // 标签条按钮事件
@@ -1315,6 +1348,7 @@ function startStatusPoller() {
         }
       }
       if (changed) pushTabState();
+      sendHomeProjects(projectsFromSessions(data));
     } catch {
       /* 服务暂不可达时跳过本轮 */
     }

@@ -7,6 +7,16 @@ window.addEventListener("DOMContentLoaded", () => {
   if (!list || !browse) return;
   let draggedCwd = "";
   let ignoreClicksUntil = 0;
+  let lastProjectsSignature = "";
+  let pendingProjects = null;
+
+  function applyPendingProjects() {
+    if (pendingProjects && !draggedCwd && !list.querySelector(".name-editor")) {
+      const projects = pendingProjects;
+      pendingProjects = null;
+      renderProjects(projects);
+    }
+  }
 
   function clearDropMarkers() {
     for (const row of list.querySelectorAll(".project")) {
@@ -40,6 +50,7 @@ window.addEventListener("DOMContentLoaded", () => {
         name.textContent = next;
       }
       input.replaceWith(name);
+      applyPendingProjects();
     }
     input.addEventListener("keydown", (event) => {
       event.stopPropagation();
@@ -79,7 +90,15 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   browse.addEventListener("click", () => ipcRenderer.send("app:home-browse"));
-  ipcRenderer.on("app:home-projects", (_e, projects) => {
+  function renderProjects(projects) {
+    const signature = JSON.stringify(projects.map(({ cwd, name, count }) => [cwd, name, count]));
+    if (signature === lastProjectsSignature) return;
+    if (draggedCwd || list.querySelector(".name-editor")) {
+      pendingProjects = projects;
+      return;
+    }
+    lastProjectsSignature = signature;
+    const scrollTop = list.scrollTop;
     list.replaceChildren();
     document.getElementById("project-count").textContent = projects.length > 1
       ? `${projects.length} 个 · 拖动排序`
@@ -162,9 +181,12 @@ window.addEventListener("DOMContentLoaded", () => {
       row.addEventListener("dragend", () => {
         draggedCwd = "";
         clearDropMarkers();
+        applyPendingProjects();
       });
       list.appendChild(row);
     }
-  });
+    list.scrollTop = scrollTop;
+  }
+  ipcRenderer.on("app:home-projects", (_e, projects) => renderProjects(projects));
   ipcRenderer.send("app:home-ready");
 });

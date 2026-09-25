@@ -6,7 +6,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 
 - 仓库：https://github.com/wangjk1996-cloud/Pi-Desktop
 - 本地路径：`C:\Users\Leo\Documents\GitHub\Pi-Desktop`
-- 当前版本：v1.7.0
+- 当前版本：v1.7.1
 - 环境：Windows 11、Git Bash、Node 24、Electron 39、electron-builder 26
 
 ## 1. 架构（读代码前先看这个）
@@ -30,7 +30,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 - 每个标签独立内存存储分区（`partition: "tab-N"`）。新标签先打开壳内置首页；直接加载 pi-web 根地址仍会自动恢复最近项目，不能以分区隔离代替首页。
 - 「+」直接新建首页标签；首页中选择最近项目或目录后，在当前标签通过 `?cwd=` 直达项目。标签固定宽度 148px，超出时可用左右按钮、滚轮或固定宽度 224px 的自绘「全部标签页」列表切换。
 - 首页采用居中的内容列：Logo 与品牌名、按本地时间变化的问候、主要「打开项目目录」按钮、最近项目列表。品牌名采用与图标中的 π 一致的 Times New Roman Bold 字形；Logo 不加白色描边。首页问候分为九个时段，每段三句，按日期轮换；跨时段自动更新。首页本身固定在窗口可视区内，最近项目列表占用剩余空间并在内部滚动；不能让整个页面右侧出现滚动条。品牌和问候位置固定。新首页视图加载完成后再显示，避免新建标签时出现白屏。溢出标签菜单可滚动，但不显示突兀的滚动条；收到状态更新时保留列表位置，内容渲染完成后才显示菜单。
-- 首页项目可拖动排序并修改显示名称；已打开的标签同步使用显示名称，双击标签名也可改名。设置保存在 `%APPDATA%\pi-desktop-app\project-preferences.json`，不移动文件夹、不修改 pi-web 会话数据。
+- 首页项目可拖动排序并修改显示名称；已打开的标签同步使用显示名称，双击标签名也可改名。所有已打开的首页会同步更新项目列表、顺序和名称；无会话的新项目也会显示。设置及打开过的目录保存在 `%APPDATA%\pi-desktop-app\project-preferences.json`，不移动文件夹、不修改 pi-web 会话数据。
 - 后台标签保持存活但从窗口卸下（`removeChildView`），不切回零绘制开销。
 - pi-web 官方 URL 参数：`/?cwd=<路径>` 直达项目工作区（跳过项目选择）；`/?session=<id>` 直达会话。
 
