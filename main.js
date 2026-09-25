@@ -90,8 +90,7 @@ let quitUpdateDone = false;
 let reusedExternal = false; // 当前复用的是外部 pi-web 服务(可能随时退出)
 let watchdog = null;
 
-// 标签页: id -> { id, content, url, project }
-const MAX_TABS = 5;
+// 标签页: id -> { id, content, url, project, cwdBase, unread, running, lastSeen }
 const STRIP_HEIGHT = 40;
 const tabs = new Map();
 let tabSeq = 0;
@@ -495,12 +494,13 @@ html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#101010}
 .tab .label{flex:1;overflow:hidden;text-overflow:ellipsis}
 .tab .x{border:none;background:transparent;color:inherit;font-size:12px;cursor:pointer;border-radius:4px;padding:0 4px;opacity:.6;line-height:1}
 .tab .x:hover{background:rgba(255,255,255,.15);opacity:1}
+.tab.dragover{outline:1px dashed #3b82f6;outline-offset:-1px}
 .dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:#6b7280}
 .dot.unread{background:#3b82f6}
 .dot.running{width:10px;height:10px;min-width:10px;background:transparent;
   border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-</style></head><body><div id="bar"><div id="tabs"></div><button id="add" title="新建标签页">+</button></div></body></html>`;
+</style></head><body><div id="bar"><div id="tabs"></div><button id="add" title="打开项目">+</button></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -529,7 +529,7 @@ function pushTabState() {
   stripView.webContents.send("app:tabs", {
     tabs: list,
     activeId: activeTabId,
-    canNew: tabs.size < MAX_TABS,
+    canNew: true, // 无上限
   });
   rebuildTray();
 }
@@ -679,15 +679,15 @@ function wireContentEvents(entry) {
   });
 }
 
-function newTab(url) {
-  if (tabs.size >= MAX_TABS || !mainWindow || mainWindow.isDestroyed()) return;
+function newTab(url, cwdBase) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   const id = ++tabSeq;
   const entry = {
     id,
     content: null, // 后台标签不持有页面实例, 激活时才创建
     url: url || homeUrl(),
-    project: "",
-    cwdBase: "",
+    project: cwdBase || "",
+    cwdBase: cwdBase || "",
     unread: false,
     running: false,
     lastSeen: Date.now(),
@@ -748,6 +748,9 @@ function createMainWindow() {
     for (const t of tabs.values()) destroyTabContent(t);
     tabs.clear();
     activeTabId = null;
+    if (chooserView && !chooserView.webContents.isDestroyed()) chooserView.webContents.close();
+    chooserView = null;
+    chooserOpen = false;
     mainWindow = null;
     stripView = null;
     rebuildTray();
@@ -766,15 +769,144 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
+// ---------------------------------------------------------------------------
+// 项目选择面板: 点「+」弹出, 列出现有项目 + 新建项目; 选定后才开标签并直达项目
+// ---------------------------------------------------------------------------
+let chooserView = null;
+let chooserOpen = false;
+
+function chooserHtml() {
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;background:transparent;font:13px "Segoe UI",sans-serif}
+#panel{background:#17171c;border:1px solid #2c2c34;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.5);
+  overflow:hidden;color:#dbe4f0}
+#head{padding:10px 14px;font-size:12px;color:#8fa3bf;border-bottom:1px solid #26262e}
+#list{max-height:320px;overflow-y:auto}
+.row{display:flex;align-items:center;gap:8px;padding:9px 14px;cursor:pointer}
+.row:hover{background:#232329}
+.row-main{flex:1;min-width:0}
+.name{font-size:13px;color:#e6edf7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cwd{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.count{font-size:11px;color:#64748b;background:#232329;border-radius:8px;padding:1px 8px}
+#new{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;color:#7cb3ff;
+  border-top:1px solid #26262e;font-size:13px}
+#new:hover{background:#232329}
+.empty{padding:18px 14px;color:#64748b;text-align:center}
+</style></head><body><div id="panel"><div id="head">打开项目</div><div id="list"></div><div id="new">＋ 新建项目（选择目录）…</div></div></body></html>`;
+  return "data:text/html;charset=utf-8," + encodeURIComponent(html);
+}
+
+// 从 pi-web API 汇总项目列表(按会话目录去重, 最近活跃的排前面)
+async function fetchProjects() {
+  try {
+    const res = await fetch(`http://${APP_URL_HOST}:${serverPort}/api/sessions`);
+    const data = await res.json();
+    const byCwd = new Map();
+    for (const s of data.sessions || []) {
+      if (!s.cwd) continue;
+      const cur = byCwd.get(s.cwd) || { cwd: s.cwd, name: String(s.cwd).split(/[\\/]/).filter(Boolean).pop(), count: 0, last: 0 };
+      cur.count += 1;
+      cur.last = Math.max(cur.last, Date.parse(s.modified) || 0);
+      byCwd.set(s.cwd, cur);
+    }
+    return [...byCwd.values()].sort((a, b) => b.last - a.last);
+  } catch {
+    return [];
+  }
+}
+
+function ensureChooser() {
+  if (chooserView && !chooserView.webContents.isDestroyed()) return chooserView;
+  chooserView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, "chooser-preload.js"),
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+  chooserView.setBackgroundColor("#00000000");
+  mainWindow.contentView.addChildView(chooserView);
+  chooserView.webContents.loadURL(chooserHtml());
+  chooserView.webContents.on("blur", () => hideChooser());
+  return chooserView;
+}
+
+function hideChooser() {
+  if (chooserView && chooserOpen) {
+    chooserView.setVisible(false);
+    chooserOpen = false;
+  }
+}
+
+async function toggleChooser() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (chooserOpen) {
+    hideChooser();
+    return;
+  }
+  const v = ensureChooser();
+  const projects = await fetchProjects();
+  const rows = Math.min(Math.max(projects.length, 1) + 1, 9);
+  v.setBounds({ x: 8, y: STRIP_HEIGHT + 2, width: 340, height: 42 + rows * 40 });
+  v.setVisible(true);
+  chooserOpen = true;
+  v.webContents.send("app:projects", projects);
+  v.webContents.focus();
+}
+
+function openProjectInNewTab(cwd) {
+  hideChooser();
+  const base = String(cwd).split(/[\\/]/).filter(Boolean).pop();
+  newTab(`${homeUrl()}/?cwd=${encodeURIComponent(cwd)}`, base);
+}
+
 // 标签条按钮事件
-ipcMain.on("app:new-tab", (e) => {
-  if (stripView && e.sender === stripView.webContents && tabs.size < MAX_TABS) newTab();
+ipcMain.on("app:toggle-chooser", (e) => {
+  if (stripView && e.sender === stripView.webContents) toggleChooser();
 });
 ipcMain.on("app:switch-tab", (e, id) => {
-  if (stripView && e.sender === stripView.webContents) switchTab(id);
+  if (stripView && e.sender === stripView.webContents) {
+    hideChooser();
+    switchTab(id);
+  }
 });
 ipcMain.on("app:close-tab", (e, id) => {
-  if (stripView && e.sender === stripView.webContents) closeTab(id);
+  if (stripView && e.sender === stripView.webContents) {
+    hideChooser();
+    closeTab(id);
+  }
+});
+ipcMain.on("app:reorder-tab", (e, { dragId, targetId }) => {
+  if (!stripView || e.sender !== stripView.webContents) return;
+  if (!tabs.has(dragId) || !tabs.has(targetId)) return;
+  const entries = [...tabs.entries()];
+  const from = entries.findIndex(([k]) => k === dragId);
+  const to = entries.findIndex(([k]) => k === targetId);
+  if (from < 0 || to < 0) return;
+  const [moved] = entries.splice(from, 1);
+  entries.splice(to, 0, moved);
+  tabs.clear();
+  for (const [k, v] of entries) tabs.set(k, v);
+  pushTabState();
+});
+
+// 选择面板事件
+ipcMain.on("app:open-project", (e, cwd) => {
+  if (chooserView && e.sender === chooserView.webContents && typeof cwd === "string" && cwd) {
+    openProjectInNewTab(cwd);
+  }
+});
+ipcMain.on("app:browse-project", async (e) => {
+  if (!chooserView || e.sender !== chooserView.webContents) return;
+  const r = await dialog.showOpenDialog(mainWindow, {
+    title: "选择项目目录",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (!r.canceled && r.filePaths[0]) openProjectInNewTab(r.filePaths[0]);
+  else hideChooser();
+});
+ipcMain.on("app:close-chooser", (e) => {
+  if (chooserView && e.sender === chooserView.webContents) hideChooser();
 });
 
 function createTray() {

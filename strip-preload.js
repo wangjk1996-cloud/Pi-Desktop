@@ -1,18 +1,19 @@
-// 供顶部标签条使用的 preload: 渲染标签、转发点击事件
+// 标签条 preload: 标签渲染/切换/关闭/拖动排序 + 打开项目选择面板
 const { ipcRenderer } = require("electron");
 
 window.addEventListener("DOMContentLoaded", () => {
   const add = document.getElementById("add");
   const tabsEl = document.getElementById("tabs");
+  let dragId = null;
 
-  add.addEventListener("click", () => ipcRenderer.send("app:new-tab"));
+  add.addEventListener("click", () => ipcRenderer.send("app:toggle-chooser"));
 
   ipcRenderer.on("app:tabs", (_e, state) => {
-    add.disabled = !state.canNew;
     tabsEl.innerHTML = "";
     for (const t of state.tabs) {
       const d = document.createElement("div");
       d.className = "tab" + (t.id === state.activeId ? " active" : "");
+      d.draggable = true;
 
       const dot = document.createElement("span");
       dot.className = "dot" + (t.status === "running" ? " running" : t.status === "unread" ? " unread" : "");
@@ -35,6 +36,26 @@ window.addEventListener("DOMContentLoaded", () => {
       }
 
       d.addEventListener("click", () => ipcRenderer.send("app:switch-tab", t.id));
+
+      // 拖动排序
+      d.addEventListener("dragstart", (ev) => {
+        dragId = t.id;
+        ev.dataTransfer.effectAllowed = "move";
+      });
+      d.addEventListener("dragover", (ev) => {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+        d.classList.add("dragover");
+      });
+      d.addEventListener("dragleave", () => d.classList.remove("dragover"));
+      d.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        d.classList.remove("dragover");
+        if (dragId && dragId !== t.id) {
+          ipcRenderer.send("app:reorder-tab", { dragId, targetId: t.id });
+        }
+      });
+
       tabsEl.appendChild(d);
     }
   });
