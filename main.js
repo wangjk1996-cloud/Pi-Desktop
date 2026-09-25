@@ -9,7 +9,7 @@
 //   5. 壳自更新: electron-updater 从 GitHub Releases 检查下载
 "use strict";
 
-const { app, BrowserWindow, WebContentsView, Tray, Menu, dialog, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, WebContentsView, Tray, Menu, dialog, shell, screen, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const net = require("net");
@@ -92,6 +92,7 @@ let watchdog = null;
 
 // 标签页: id -> { id, content, url, project, cwdBase, unread, running, lastSeen }
 const STRIP_HEIGHT = 40;
+const OVERFLOW_WIDTH = 280;
 const tabs = new Map();
 let tabSeq = 0;
 let activeTabId = null;
@@ -478,31 +479,86 @@ function homeUrl() {
   return `http://${APP_URL_HOST}:${serverPort}`;
 }
 
+function tabHomeUrl() {
+  const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;overflow:hidden;background:#1b1d22;color:#eff1f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
+body{box-sizing:border-box;padding:clamp(64px,13vh,112px) 32px 24px}
+main{width:min(100%,780px);height:100%;min-height:0;margin:0 auto;display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:18px;flex:none;color:#f2f3f6;font:700 58px/1 "Times New Roman",serif;letter-spacing:.027em}
+.mark{width:64px;height:64px;border-radius:14px;flex:none}
+.welcome{flex:none;margin-top:34px}
+h1{font:500 27px/1.3 "Noto Serif SC",serif;letter-spacing:0;margin:0 0 8px}
+.intro{font-size:13px;line-height:1.7;color:#9da6b5;margin:0}
+#browse{display:inline-flex;align-items:center;gap:10px;height:42px;margin-top:28px;padding:0 16px;
+  border:1px solid #c4d0e8;border-radius:8px;background:#dce6f8;color:#1b2940;
+  cursor:pointer;font:600 13px "Segoe UI","Microsoft YaHei",sans-serif;transition:background .12s,border-color .12s}
+#browse:hover{background:#eef3fd;border-color:#eef3fd}
+#browse:focus-visible,.project:focus-visible{outline:2px solid #8eafe8;outline-offset:2px}
+#browse svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.recent{display:flex;flex:1;flex-direction:column;min-height:0;margin-top:28px}
+.heading{display:flex;flex:none;align-items:baseline;justify-content:space-between;gap:16px;padding-bottom:15px;
+  border-bottom:1px solid #383b43;font-size:14px;font-weight:600;color:#e5e8ef}
+#project-count{font-size:12px;font-weight:400;color:#858e9d}
+#projects{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#414650 transparent;padding:7px 4px 0 0}
+#projects::-webkit-scrollbar{width:6px}
+#projects::-webkit-scrollbar-thumb{background:#414650;border-radius:5px}
+.project{display:flex;align-items:center;gap:15px;width:100%;min-height:68px;padding:10px 13px;
+  border:0;border-radius:8px;background:transparent;color:#eef0f4;text-align:left;cursor:pointer;font:inherit}
+.project:hover{background:#282c35}
+.folder{display:grid;place-items:center;flex:0 0 23px;color:#9aa6ba}
+.folder svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.details{flex:1;min-width:0}.name,.cwd{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.name{font-size:13px;font-weight:600}.cwd{font-size:11px;color:#8f98a8;margin-top:5px}
+.count{flex:none;font-size:11px;color:#858e9d}
+.empty{padding:30px 13px;color:#929cac;font-size:12px}
+@media(max-height:650px){.welcome{margin-top:25px}}
+</style></head><body><main><div class="brand"><svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" aria-label="Pi Desktop"><rect x="0" y="0" width="1024" height="1024" rx="230" ry="230" fill="#101010"/><text x="512" y="866" font-family="'Times New Roman'" font-weight="bold" font-size="1450" fill="#fff" text-anchor="middle">π</text></svg><span>Pi Desktop</span></div><header class="welcome"><h1 id="greeting">欢迎使用 Pi Desktop</h1><p class="intro">从最近项目继续，或指定其他工作目录。</p><button id="browse"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5V6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>打开项目目录</button></header><section class="recent"><div class="heading">最近项目<span id="project-count"></span></div><div id="projects"><div class="empty">正在加载项目…</div></div></section></main></body></html>`;
+  return "data:text/html;charset=utf-8," + encodeURIComponent(html);
+}
+
 function stripHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#101010}
-#bar{display:flex;align-items:center;height:${STRIP_HEIGHT}px;padding:0 150px 0 8px;
-  -webkit-app-region:drag;color:#dbe4f0;font:12px "Segoe UI",sans-serif;user-select:none}
-#add{-webkit-app-region:no-drag;order:2;width:26px;height:26px;min-width:26px;border:none;border-radius:6px;
-  background:transparent;color:#dbe4f0;font-size:16px;cursor:pointer;line-height:1}
-#add:hover{background:rgba(255,255,255,.12)}
-#add:disabled{opacity:.3;cursor:default}
-#tabs{order:1;display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0;
-  overflow-x:auto;scrollbar-width:none}
+html,body{margin:0;height:${STRIP_HEIGHT}px;overflow:hidden;background:#15161a}
+#bar{display:flex;align-items:center;gap:5px;height:${STRIP_HEIGHT}px;padding:0 146px 0 9px;
+  box-sizing:border-box;-webkit-app-region:drag;color:#d9dce3;font:12px "Segoe UI","Microsoft YaHei",sans-serif;user-select:none}
+#tabs{display:flex;align-items:center;gap:5px;flex:0 1 auto;min-width:0;height:100%;
+  overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-app-region:no-drag}
 #tabs::-webkit-scrollbar{display:none}
-.tab{-webkit-app-region:no-drag;display:flex;align-items:center;gap:7px;flex:0 1 150px;min-width:76px;
-  padding:5px 8px;border-radius:8px;background:#1c1c22;color:#9aa4b2;cursor:pointer;white-space:nowrap;box-sizing:border-box}
-.tab.active{background:#2c2c34;color:#ffffff}
+.tab{display:flex;align-items:center;gap:9px;flex:0 0 172px;width:172px;height:31px;
+  padding:0 9px 0 11px;border:1px solid transparent;border-radius:8px;
+  background:#22242a;color:#aeb4c0;cursor:pointer;white-space:nowrap;box-sizing:border-box;
+  transition:background .12s,border-color .12s}
+.tab:hover{background:#2b2e36;color:#f0f2f6}
+.tab.active{background:#353944;border-color:#4c5260;color:#fff}
+.tab:focus-visible,#add:focus-visible,.nav:focus-visible{outline:2px solid #7eaeff;outline-offset:-2px}
 .tab .label{flex:1;overflow:hidden;text-overflow:ellipsis}
-.tab .x{border:none;background:transparent;color:inherit;font-size:12px;cursor:pointer;border-radius:4px;padding:0 4px;opacity:.6;line-height:1}
-.tab .x:hover{background:rgba(255,255,255,.15);opacity:1}
+.tab .x{border:none;background:transparent;color:inherit;font-size:16px;cursor:pointer;border-radius:4px;
+  width:19px;height:19px;padding:0;opacity:.65;line-height:17px}
+.tab .x:hover{background:rgba(255,255,255,.16);opacity:1}
 .tab.dragover{outline:1px dashed #3b82f6;outline-offset:-1px}
 .dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:#6b7280}
 .dot.unread{background:#3b82f6}
 .dot.running{width:10px;height:10px;min-width:10px;background:transparent;
   border:2px solid #3b82f6;border-top-color:transparent;animation:spin 0.9s linear infinite}
+#add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:7px;
+  background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0}
+#add{font-size:20px;font-weight:300;line-height:1}
+.nav svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+#add:hover,.nav:hover{background:#30343d;color:#fff}
+.nav:disabled{opacity:.3;cursor:default;background:transparent}
+#nav{display:none;align-items:center;gap:2px;margin-left:3px;-webkit-app-region:no-drag}
+#bar.overflow #nav{display:flex}
+#all{margin-left:2px;background:#2c3039;border:1px solid #444a56}
+#bar.light .tab{background:#e9ebef;color:#555f6c}
+#bar.light .tab:hover{background:#dde1e8;color:#1f2328}
+#bar.light .tab.active{background:#fff;border-color:#c6cdd7;color:#1f2328}
+#bar.light .tab .x:hover{background:#d9dee6}
+#bar.light #add,#bar.light .nav{color:#4c5665}
+#bar.light #add:hover,#bar.light .nav:hover{background:#dce2e9;color:#1f2328}
+#bar.light #all{background:#e9ebef;border-color:#c6cdd7}
 @keyframes spin{to{transform:rotate(360deg)}}
-</style></head><body><div id="bar"><div id="tabs"></div><button id="add" title="打开项目">+</button></div></body></html>`;
+</style></head><body><div id="bar"><div id="tabs" role="tablist"></div><button id="add" title="新建标签页" aria-label="新建标签页">+</button><div id="nav"><button class="nav" id="left" title="向左滚动标签页" aria-label="向左滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button><button class="nav" id="right" title="向右滚动标签页" aria-label="向右滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button class="nav" id="all" title="全部标签页" aria-label="全部标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -533,6 +589,9 @@ function pushTabState() {
     activeId: activeTabId,
     canNew: true, // 无上限
   });
+  if (overflowOpen && overflowWin && !overflowWin.isDestroyed()) {
+    overflowWin.webContents.send("app:overflow-tabs", { tabs: list, activeId: activeTabId });
+  }
   rebuildTray();
 }
 
@@ -565,6 +624,7 @@ function ensureTabContent(entry) {
   if (entry.content && !entry.content.webContents.isDestroyed()) return;
   const content = new WebContentsView({
     webPreferences: {
+      preload: path.join(__dirname, "home-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -573,7 +633,9 @@ function ensureTabContent(entry) {
       partition: `tab-${entry.id}`,
     },
   });
+  if (entry.url.startsWith("data:text/html")) content.setBackgroundColor("#1b1d22");
   entry.content = content;
+  entry.homeReady = !entry.url.startsWith("data:text/html");
   wireContentEvents(entry);
   content.webContents.loadURL(entry.url);
 }
@@ -596,14 +658,16 @@ function switchTab(id) {
   const t = tabs.get(id);
   t.unread = false; // 切到该标签即视为已读
   ensureTabContent(t);
-  try {
-    mainWindow.contentView.addChildView(t.content);
-  } catch {
-    /* ignore */
+  if (t.homeReady) {
+    try {
+      mainWindow.contentView.addChildView(t.content);
+    } catch {
+      /* ignore */
+    }
   }
   layoutWindow();
   mainWindow.setTitle(
-    t.project ? `Pi Desktop - ${t.project} | Powered by Pi` : "Pi Desktop | Powered by Pi"
+    `Pi Desktop - ${t.project || "首页"} | Powered by Pi`
   );
   pushTabState();
 }
@@ -613,12 +677,13 @@ function wireContentEvents(entry) {
 
   content.webContents.on("page-title-updated", (e, title) => {
     e.preventDefault();
+    if (entry.url.startsWith("data:text/html")) return;
     entry.project = title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
     if (entry.id === activeTabId) {
       mainWindow.setTitle(
         entry.project
           ? `Pi Desktop - ${entry.project} | Powered by Pi`
-          : "Pi Desktop | Powered by Pi"
+          : "Pi Desktop - 首页 | Powered by Pi"
       );
     } else {
       entry.unread = true; // 后台标签有动态, 标记未读
@@ -631,6 +696,14 @@ function wireContentEvents(entry) {
 
   // 内容加载后同步标签条/原生按钮配色, 与 pi-web 顶栏协调
   content.webContents.on("did-finish-load", async () => {
+    if (entry.url.startsWith("data:text/html")) {
+      entry.homeReady = true;
+      if (entry.id === activeTabId && mainWindow && !mainWindow.isDestroyed() &&
+          !mainWindow.contentView.children.includes(content)) {
+        mainWindow.contentView.addChildView(content);
+        layoutWindow();
+      }
+    }
     // 抓取项目路径按钮文本, 提取项目目录名(供状态轮询匹配)
     content.webContents
       .executeJavaScript(
@@ -662,7 +735,8 @@ function wireContentEvents(entry) {
   });
 
   // 服务未就绪/被重启时自动重试加载, 不留白板错误页
-  content.webContents.on("did-fail-load", () => {
+  content.webContents.on("did-fail-load", (_e, errorCode, _description, _url, isMainFrame) => {
+    if (errorCode === -3 || !isMainFrame) return;
     setTimeout(() => {
       if (!content.webContents.isDestroyed()) content.webContents.loadURL(entry.url);
     }, 3000);
@@ -681,15 +755,15 @@ function wireContentEvents(entry) {
   });
 }
 
-function newTab(url, cwdBase) {
+function newTab() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const id = ++tabSeq;
   const entry = {
     id,
     content: null, // 后台标签不持有页面实例, 激活时才创建
-    url: url || homeUrl(),
-    project: cwdBase || "",
-    cwdBase: cwdBase || "",
+    url: tabHomeUrl(),
+    project: "",
+    cwdBase: "",
     unread: false,
     running: false,
     lastSeen: Date.now(),
@@ -710,11 +784,14 @@ function newTab(url, cwdBase) {
 function closeTab(id) {
   const entry = tabs.get(id);
   if (!entry || tabs.size <= 1 || !mainWindow || mainWindow.isDestroyed()) return;
+  const ids = [...tabs.keys()];
+  const index = ids.indexOf(id);
+  const nextId = ids[index + 1] || ids[index - 1];
   destroyTabContent(entry);
   tabs.delete(id);
   if (activeTabId === id) {
     activeTabId = null;
-    switchTab([...tabs.keys()][tabs.size - 1]);
+    switchTab(nextId);
   } else {
     pushTabState();
   }
@@ -728,7 +805,7 @@ function createMainWindow() {
     minHeight: 600,
     title: "Pi Desktop",
     icon: appIcon(),
-    backgroundColor: "#0b1220",
+    backgroundColor: "#1b1d22",
     titleBarStyle: "hidden",
     titleBarOverlay: { color: "#101010", symbolColor: "#dbe4f0", height: STRIP_HEIGHT },
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
@@ -746,7 +823,8 @@ function createMainWindow() {
   stripView.webContents.on("did-finish-load", () => pushTabState());
 
   layoutWindow();
-  mainWindow.on("resize", layoutWindow);
+  mainWindow.on("resize", () => { layoutWindow(); hideOverflow(); });
+  mainWindow.on("move", hideOverflow);
 
   // 关窗 -> 托盘驻留, 标签页与服务都保留
   mainWindow.on("close", (e) => {
@@ -759,9 +837,9 @@ function createMainWindow() {
     for (const t of tabs.values()) destroyTabContent(t);
     tabs.clear();
     activeTabId = null;
-    if (chooserWin && !chooserWin.isDestroyed()) chooserWin.close();
-    chooserWin = null;
-    chooserOpen = false;
+    if (overflowWin && !overflowWin.isDestroyed()) overflowWin.close();
+    overflowWin = null;
+    overflowOpen = false;
     mainWindow = null;
     stripView = null;
     rebuildTray();
@@ -781,14 +859,14 @@ function showMainWindow() {
 }
 
 // ---------------------------------------------------------------------------
-// 项目选择面板: 点「+」弹出, 列出现有项目 + 新建项目; 选定后才开标签并直达项目
+// 溢出标签面板
 // ---------------------------------------------------------------------------
-let chooserWin = null;
-let chooserOpen = false;
+let overflowWin = null;
+let overflowOpen = false;
 
-function ensureChooser() {
-  if (chooserWin && !chooserWin.isDestroyed()) return chooserWin;
-  chooserWin = new BrowserWindow({
+function ensureOverflow() {
+  if (overflowWin && !overflowWin.isDestroyed()) return overflowWin;
+  overflowWin = new BrowserWindow({
     parent: mainWindow,
     frame: false,
     transparent: true,
@@ -797,80 +875,72 @@ function ensureChooser() {
     maximizable: false,
     skipTaskbar: true,
     show: false,
-    width: 380,
+    width: OVERFLOW_WIDTH,
     height: 300,
-    alwaysOnTop: false,
     webPreferences: {
-      preload: path.join(__dirname, "chooser-preload.js"),
+      preload: path.join(__dirname, "overflow-preload.js"),
       contextIsolation: true,
       sandbox: true,
     },
   });
-  chooserWin.setMenu(null);
-  chooserWin.webContents.loadURL(chooserHtml());
-  chooserWin.on("blur", () => hideChooser());
-  return chooserWin;
+  overflowWin.setMenu(null);
+  overflowWin.webContents.loadURL(overflowHtml());
+  overflowWin.on("blur", hideOverflow);
+  return overflowWin;
 }
 
-function hideChooser() {
-  if (chooserWin && chooserOpen) {
-    chooserWin.hide();
-    chooserOpen = false;
+function hideOverflow() {
+  if (overflowWin && overflowOpen) {
+    overflowWin.hide();
+    overflowOpen = false;
   }
 }
 
-// 先弹出面板(加载中), 再异步填充项目列表, 避免等待造成"卡死"感
-async function toggleChooser() {
+function toggleOverflow(anchorRight) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (chooserOpen) {
-    hideChooser();
+  if (overflowOpen) {
+    hideOverflow();
     return;
   }
-  const w = ensureChooser();
+  const w = ensureOverflow();
   const b = mainWindow.getBounds();
-  const rowsHint = 4;
-  w.setSize(380, 48 + rowsHint * 46 + 48);
-  w.setPosition(b.x + 10, b.y + STRIP_HEIGHT + 6);
-  w.show();
-  w.focus();
-  chooserOpen = true;
+  const work = screen.getDisplayMatching(b).workArea;
+  w.setSize(OVERFLOW_WIDTH, 52 + Math.min(tabs.size, 8) * 42);
+  const x = Math.max(work.x, Math.min(b.x + Math.round(Number(anchorRight) || 0) - OVERFLOW_WIDTH, work.x + work.width - OVERFLOW_WIDTH));
+  const y = Math.max(work.y, Math.min(b.y + STRIP_HEIGHT + 4, work.y + work.height - w.getSize()[1]));
+  w.setPosition(x, y);
+  overflowOpen = true;
   const wc = w.webContents;
-  const fill = async () => {
-    const projects = await fetchProjects();
-    if (wc.isDestroyed()) return;
-    const rows = Math.min(Math.max(projects.length, 1), 8);
-    w.setSize(380, 48 + rows * 46 + 48);
-    wc.send("app:projects", projects);
+  const fill = () => {
+    if (!wc.isDestroyed() && overflowOpen) wc.send("app:overflow-tabs", {
+      tabs: [...tabs.values()].map((t) => ({ id: t.id, title: t.project, status: t.running ? "running" : t.unread ? "unread" : "idle" })),
+      activeId: activeTabId,
+      revealActive: true,
+    });
   };
   if (wc.isLoading()) wc.once("did-finish-load", fill);
   else fill();
 }
 
-function chooserHtml() {
+function overflowHtml() {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;overflow:hidden;font:13px "Segoe UI","Microsoft YaHei",sans-serif}
 #panel{display:flex;flex-direction:column;height:100vh;box-sizing:border-box;
-  background:#16161b;border:1px solid #2e2e38;border-radius:10px;overflow:hidden;color:#dbe4f0}
-#head{padding:11px 14px 9px;font-size:12px;letter-spacing:.04em;color:#8fa3bf;
-  border-bottom:1px solid #232329;display:flex;align-items:center;justify-content:space-between}
-#list{flex:1;overflow-y:auto;padding:6px}
-#list::-webkit-scrollbar{width:8px}
-#list::-webkit-scrollbar-thumb{background:#2e2e38;border-radius:4px}
-.row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer}
-.row:hover{background:#232329}
-.row:active{background:#2a2a31}
-.fic{width:30px;height:30px;min-width:30px;border-radius:8px;background:#232329;display:flex;
-  align-items:center;justify-content:center;color:#8fa3bf;font-size:15px}
-.row-main{flex:1;min-width:0}
-.name{font-size:13px;color:#e6edf7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cwd{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-.count{font-size:11px;color:#8fa3bf;background:#26262e;border-radius:9px;padding:2px 9px}
-#new{display:flex;align-items:center;gap:10px;margin:6px;padding:9px 10px;border-radius:8px;
-  cursor:pointer;color:#7cb3ff;border-top:1px solid #232329;font-size:13px}
-#new:hover{background:#232329}
-.empty{padding:20px;color:#64748b;text-align:center}
-.loading{padding:20px;color:#64748b;text-align:center}
-</style></head><body><div id="panel"><div id="head">打开项目</div><div id="list"><div class="loading">加载中…</div></div><div id="new">＋ 新建项目（选择目录）…</div></div></body></html>`;
+  background:#1b1d23;border:1px solid #3b404a;border-radius:11px;overflow:hidden;color:#e8ebf0;
+  box-shadow:0 12px 30px rgba(0,0,0,.38)}
+#head{padding:15px 16px 9px;font-size:12px;font-weight:600;color:#c7ccd6}
+#list{flex:1;overflow-y:auto;scrollbar-width:none;padding:3px 7px 8px}
+#list::-webkit-scrollbar{display:none}
+.row{display:flex;align-items:center;gap:10px;width:100%;height:42px;padding:0 11px;border:0;
+  border-radius:7px;background:transparent;color:#dce1e9;text-align:left;cursor:pointer;font:inherit}
+.row:hover,.row:focus-visible{background:#30343d;outline:none}
+.row.active{background:#2e3440;color:#fff}
+.num{color:#7f8998;font-size:11px;width:18px;flex:0 0 18px}
+.label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:7px;height:7px;border-radius:50%;background:#687383;flex:0 0 7px}
+.dot.unread{background:#6aa6f5}.dot.running{background:#6aa6f5}
+.check{width:15px;color:#9ec1ff;text-align:center}
+</style></head><body><div id="panel"><div id="head">全部标签页</div><div id="list"></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
 
@@ -893,25 +963,36 @@ async function fetchProjects() {
   }
 }
 
-function openProjectInNewTab(cwd) {
-  hideChooser();
+function homeEntryForSender(sender) {
+  return [...tabs.values()].find((t) => t.content && t.content.webContents === sender && t.url.startsWith("data:text/html"));
+}
+
+function openProjectInTab(entry, cwd) {
   const base = String(cwd).split(/[\\/]/).filter(Boolean).pop();
-  newTab(`${homeUrl()}/?cwd=${encodeURIComponent(cwd)}`, base);
+  entry.project = base;
+  entry.cwdBase = base;
+  entry.url = `${homeUrl()}/?cwd=${encodeURIComponent(cwd)}`;
+  entry.content.webContents.loadURL(entry.url);
+  if (entry.id === activeTabId) mainWindow.setTitle(`Pi Desktop - ${base} | Powered by Pi`);
+  pushTabState();
 }
 
 // 标签条按钮事件
-ipcMain.on("app:toggle-chooser", (e) => {
-  if (stripView && e.sender === stripView.webContents) toggleChooser();
+ipcMain.on("app:new-tab", (e) => {
+  if (stripView && e.sender === stripView.webContents) newTab();
+});
+ipcMain.on("app:toggle-overflow", (e, anchorRight) => {
+  if (stripView && e.sender === stripView.webContents) toggleOverflow(anchorRight);
 });
 ipcMain.on("app:switch-tab", (e, id) => {
   if (stripView && e.sender === stripView.webContents) {
-    hideChooser();
+    hideOverflow();
     switchTab(id);
   }
 });
 ipcMain.on("app:close-tab", (e, id) => {
   if (stripView && e.sender === stripView.webContents) {
-    hideChooser();
+    hideOverflow();
     closeTab(id);
   }
 });
@@ -929,23 +1010,45 @@ ipcMain.on("app:reorder-tab", (e, { dragId, targetId }) => {
   pushTabState();
 });
 
-// 选择面板事件
-ipcMain.on("app:open-project", (e, cwd) => {
-  if (chooserWin && !chooserWin.isDestroyed() && e.sender === chooserWin.webContents && typeof cwd === "string" && cwd) {
-    openProjectInNewTab(cwd);
+// 首页项目选择
+ipcMain.on("app:home-ready", async (e) => {
+  const entry = homeEntryForSender(e.sender);
+  if (!entry) return;
+  const projects = await fetchProjects();
+  if (!e.sender.isDestroyed() && homeEntryForSender(e.sender) === entry) {
+    e.sender.send("app:home-projects", projects);
   }
 });
-ipcMain.on("app:browse-project", async (e) => {
-  if (!chooserWin || chooserWin.isDestroyed() || e.sender !== chooserWin.webContents) return;
+ipcMain.on("app:home-open-project", (e, cwd) => {
+  const entry = homeEntryForSender(e.sender);
+  if (entry && typeof cwd === "string" && cwd) openProjectInTab(entry, cwd);
+});
+ipcMain.on("app:home-browse", async (e) => {
+  const entry = homeEntryForSender(e.sender);
+  if (!entry) return;
   const r = await dialog.showOpenDialog(mainWindow, {
     title: "选择项目目录",
     properties: ["openDirectory", "createDirectory"],
   });
-  if (!r.canceled && r.filePaths[0]) openProjectInNewTab(r.filePaths[0]);
-  else hideChooser();
+  if (!r.canceled && r.filePaths[0] && homeEntryForSender(e.sender) === entry) {
+    openProjectInTab(entry, r.filePaths[0]);
+  }
 });
-ipcMain.on("app:close-chooser", (e) => {
-  if (chooserWin && !chooserWin.isDestroyed() && e.sender === chooserWin.webContents) hideChooser();
+// 溢出面板事件
+ipcMain.on("app:overflow-switch", (e, id) => {
+  if (!overflowWin || overflowWin.isDestroyed() || e.sender !== overflowWin.webContents) return;
+  hideOverflow();
+  switchTab(id);
+});
+ipcMain.on("app:overflow-close", (e) => {
+  if (overflowWin && !overflowWin.isDestroyed() && e.sender === overflowWin.webContents) hideOverflow();
+});
+ipcMain.on("app:overflow-rendered", (e) => {
+  if (!overflowOpen || !overflowWin || overflowWin.isDestroyed() || e.sender !== overflowWin.webContents) return;
+  if (!overflowWin.isVisible()) {
+    overflowWin.show();
+    overflowWin.focus();
+  }
 });
 
 function createTray() {
@@ -1034,7 +1137,10 @@ function startWatchdog() {
       serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
       await startServer(serverPort);
       for (const entry of tabs.values()) {
-        entry.url = `http://${APP_URL_HOST}:${serverPort}`;
+        if (!entry.url.startsWith("http://")) continue;
+        const next = new URL(entry.url);
+        next.port = String(serverPort);
+        entry.url = next.href;
         if (entry.content && !entry.content.webContents.isDestroyed()) {
           entry.content.webContents.loadURL(entry.url);
         }

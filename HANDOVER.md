@@ -6,7 +6,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端：Electron 壳 + 内�
 
 - 仓库：https://github.com/wangjk1996-cloud/Pi-Desktop
 - 本地路径：`C:\Users\Leo\Documents\GitHub\Pi-Desktop`
-- 当前版本：v1.6.2
+- 当前版本：v1.6.3
 - 环境：Windows 11、Git Bash、Node 24、Electron 39、electron-builder 26
 
 ## 1. 架构（读代码前先看这个）
@@ -24,10 +24,12 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端：Electron 壳 + 内�
 
 ### 窗口/标签
 - 单主窗口：`titleBarStyle:"hidden"` + `titleBarOverlay`（原生最小化/最大化/关闭按钮保留）。
-- 窗口内多个 `WebContentsView`：顶部标签条（strip，40px，可拖动，有「+」）+ 每个标签一个内容视图 + 项目选择面板（独立无边框子窗口）。
-- `strip-preload.js`：标签条的渲染/交互（增量渲染、拖放排序、滚轮横滑）。
-- `chooser-preload.js`：项目选择面板。
-- 每个标签独立内存存储分区（`partition: "tab-N"`）→ 不触发 pi-web 的"恢复上次页面"行为，新标签停在首页。
+- 窗口内多个 `WebContentsView`：顶部标签条（strip，40px，可拖动，有「+」）+ 每个标签一个内容视图；溢出标签列表使用独立无边框子窗口。
+- `strip-preload.js`：标签条的渲染/交互（增量渲染、拖放排序、固定宽度横向滚动、溢出导航）。
+- `home-preload.js`：壳内置首页的最近项目列表与目录选择；`overflow-preload.js`：溢出标签列表。
+- 每个标签独立内存存储分区（`partition: "tab-N"`）。新标签先打开壳内置首页；直接加载 pi-web 根地址仍会自动恢复最近项目，不能以分区隔离代替首页。
+- 「+」直接新建首页标签；首页中选择最近项目或目录后，在当前标签通过 `?cwd=` 直达项目。标签固定宽度 172px，超出时可用左右按钮、滚轮或固定宽度 280px 的自绘「全部标签页」列表切换。
+- 首页采用居中的内容列：Logo 与品牌名、按本地时间变化的问候、主要「打开项目目录」按钮、最近项目列表。品牌名采用与图标中的 π 一致的 Times New Roman Bold 字形；Logo 不加白色描边。首页本身固定在窗口可视区内，最近项目列表占用剩余空间并在内部滚动；不能让整个页面右侧出现滚动条。品牌和问候位置固定。新首页视图加载完成后再显示，避免新建标签时出现白屏。溢出标签菜单可滚动，但不显示突兀的滚动条；收到状态更新时保留列表位置，内容渲染完成后才显示菜单。
 - 后台标签保持存活但从窗口卸下（`removeChildView`），不切回零绘制开销。
 - pi-web 官方 URL 参数：`/?cwd=<路径>` 直达项目工作区（跳过项目选择）；`/?session=<id>` 直达会话。
 
@@ -45,7 +47,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端：Electron 壳 + 内�
 cd /c/Users/Leo/Documents/GitHub/Pi-Desktop
 npm install                      # 装依赖（Electron 若没下载二进制，先 npm install-scripts approve electron && npm rebuild electron）
 node -e "new Function(require('fs').readFileSync('main.js','utf8'))"   # 语法快检
-npm run dist                     # 打包 → dist/PiDesktop-<版本>-setup.exe
+npm run dist                     # 打包 → dist/PiDesktop-<版本>-setup.exe（已配置 normal 压缩）
 cmd //c "dist\PiDesktop-<版本>-setup.exe /S"   # 静默安装（必须走 cmd，见坑 #5）
 cmd //c start "" "C:\Users\Leo\AppData\Local\Programs\Pi Desktop\Pi Desktop.exe"
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:30141   # 验证 200
@@ -76,15 +78,17 @@ GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | 
 12. 仓库改名后旧 URL 301 重定向有效，electron-updater 不受影响。
 13. **PowerShell 命令经 bash 传参会丢 `$` 变量** → 写成 .ps1 文件再执行。
 14. cmd 的 `/min` 之类开关在 Git Bash 里会被转成路径 → 写成 `//min`。
+15. 机器可用虚拟内存不足时，NSIS 默认最高压缩会报 `7za.exe ... Can't allocate required memory` → `package.json` 已设置 `compression: normal`；仍不足时先关闭自己的 Pi Desktop 测试进程，不要结束用户的其他应用。
 
 ## 5. 甲方的硬性要求（UX 红线，别回归）
 
 - 文案：正式商业软件书面语，禁止口语。
+- 首页问候语与操作说明各司其职，不要重复说「选择项目」。
 - 窗口标题格式：`Pi Desktop - 项目名 | Powered by Pi`（短横线 + 竖线，不要别的符号）。
 - 图标：黑底圆角方块 + Times New Roman Bold 白色 π，字形占 3/4、留白 1/4（源文件 `build/logo.svg`）。
 - 不要有默认菜单（Alt/Ctrl 唤出隐藏菜单算 bug，已 `Menu.setApplicationMenu(null)`）。
-- 新标签必须停在首页/项目选择，**绝不自动跳进上次项目**（靠独立 partition 实现，别删）。
-- 标签条交互对齐 Chrome：+ 跟在最后标签后、新标签插在当前右侧、等宽收窄、溢出滚轮、可拖拽排序、增量渲染不闪跳。
+- 新标签必须停在壳内置首页/项目选择，**绝不自动跳进上次项目**。pi-web 根地址会自动恢复最近项目；不要把它当作空白标签的首页。独立 partition 仍须保留。
+- 标签条交互：+ 跟在可见标签后并直接新建首页标签，新标签插在当前右侧；首页内选择项目后在原标签进入项目；标签保持固定宽度，溢出时用左右按钮、滚轮和与首页风格一致的自绘「全部标签页」列表；可拖拽排序，增量渲染不闪跳。关闭当前标签后切到相邻标签。
 - 讨厌：页面闪跳、白屏、跳来跳去、大小写不规范。
 - 用户是非英文母语中文用户，沟通用中文。
 
