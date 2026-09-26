@@ -8,6 +8,8 @@ pi coding agent 的 Windows 桌面客户端，提供多项目标签页、托盘�
 
 从 [Releases](../../releases) 下载最新的 `PiDesktop-*-setup.exe`，双击安装即可。桌面和开始菜单会生成 **Pi Desktop** 快捷方式。
 
+各版本改动见 [更新记录](CHANGELOG.md)。
+
 - 无需安装 Node.js、无需任何命令行操作
 - 首次启动会自动下载内核组件（pi + pi-web，需联网一次，之后离线可用）
 - 安装时若出现 SmartScreen 提示（应用未购买代码签名证书），点击"更多信息 → 仍要运行"即可

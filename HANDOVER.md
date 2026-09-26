@@ -56,12 +56,12 @@ cmd //c start "" "C:\Users\Leo\AppData\Local\Programs\Pi Desktop\Pi Desktop.exe"
 curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:30141   # 验证 200
 ```
 
-发布（先打 tag 再发布，否则 GitHub 422）：
+发布（先打 tag，再通过 GitHub Releases 页面或 API 创建**一条** Release）：
 ```bash
 git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z
-GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | grep '^password=' | cut -d= -f2-) \
-  npx electron-builder --win --publish always
 ```
+
+Release 标题、正文和资产规则见第 7 节。上传 `PiDesktop-X.Y.Z-setup.exe`、同名 `.blockmap`、`latest.yml` 三个文件；发布后确认同一 tag 只有一条 Release、三个资产齐全且 `latest.yml` 可访问。**不要执行 `npm run release` 或 `electron-builder --publish always`**：旧发布流程曾生成重复 Release。
 
 图标生成：`build/logo.svg` → Edge headless 截图 1024px（`--headless=new --default-background-color=00000000 --screenshot=...`）→ `scripts/downscale-icon.ps1` 降采样 → `scripts/pngs-to-ico.js` 打包成 `build/icon.ico`。
 
@@ -75,9 +75,9 @@ GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | 
 6. **PowerShell 脚本文件不能含中文注释**（无 BOM 的 UTF-8 会被按 GBK 解析，注释乱码吞掉下一行）。
 7. PowerShell 里 `$size * 0.5` 不能直接当构造函数参数，先赋值变量。
 8. **npm 11 的 allow-scripts 机制会拦 postinstall** → 装完 pi-web 要手动补跑 `bin/prepare-terminal.js`。
-9. **electron-builder 发布会产生重复 Release**（一个只有 blockmap）→ 用 GitHub API 合并清理（先把缺的资产搬到资产全的那条，再 DELETE 多余的）。
+9. **electron-builder 自动发布曾产生重复 Release**（一个只有 blockmap）→ v1.5.1、v1.6.1 的缺失资产已合并，重复记录已清理；后续按第 7 节创建单条 Release。
 10. 同名 Release 发布超 2 小时后不允许覆盖资产 → 升版本号重发。
-11. curl 向 GitHub API POST 中文 body 会 400 → 描述用英文。
+11. Windows shell 用 curl 向 GitHub API 发送中文正文曾遇到编码 400 → 使用明确的 UTF-8 请求体；发布说明保持中文。
 12. 仓库改名后旧 URL 301 重定向有效，electron-updater 不受影响。
 13. **PowerShell 命令经 bash 传参会丢 `$` 变量** → 写成 .ps1 文件再执行。
 14. cmd 的 `/min` 之类开关在 Git Bash 里会被转成路径 → 写成 `//min`。
@@ -101,3 +101,23 @@ GH_TOKEN=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | 
 - 用户机器上还有命令行版 pi/pi-web 在用，数据共享 `~/.pi/agent`，别动。
 - 测试必须实测：打包→安装→启动→curl 200，不许只看编译通过。
 - 发布前确认 Releases 里没有重复 release（坑 #9）。
+
+## 7. 发行记录与提交规范
+
+- `CHANGELOG.md` 是各版本更新内容的文本来源。发布前根据已合入代码写 1–3 条简短、可验证的中文要点；不要复制项目简介或填写未经验证的改动。README、交接文档的当前版本、`package.json` 和 GitHub Release 应一致。
+- tag 固定为 `vX.Y.Z`；Release 标题固定为 `Pi Desktop vX.Y.Z`。正文固定使用以下结构，更新要点与 `CHANGELOG.md` 对应：
+
+  ```markdown
+  ## 更新内容
+
+  - 具体改动一。
+  - 具体改动二。
+
+  ## 下载
+
+  下载本页的 `PiDesktop-X.Y.Z-setup.exe` 安装。
+  ```
+
+- 新版本每个 tag 只创建一条 Release，保留安装包、`.blockmap`、`latest.yml` 三个资产。旧版本若原本缺少资产，保留实际文件，不补造安装文件或更新元数据。
+- 提交标题统一用 `feat: 中文简述`、`fix: 中文简述`、`perf: 中文简述`、`docs: 中文简述` 或 `chore: 中文简述`。标题写具体改动，不再混用版本号前缀、英文长句与中文说明；版本由 tag 和 Release 标识。
+- 已发布提交关联 tag、Release 和安装包。常规整理只规范后续提交，不改写旧提交信息或强推历史，以免原有提交链接和版本指向失效。
