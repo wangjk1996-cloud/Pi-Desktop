@@ -621,10 +621,13 @@ svg{shape-rendering:geometricPrecision}
 .tab .x svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}
 .tab .x:hover{background:rgba(255,255,255,.16);opacity:1}
 .tab.dragover{outline:1px dashed #3b82f6;outline-offset:-1px}
-.dot{width:8px;height:8px;min-width:8px;border-radius:50%;background:#6b7280}
-.dot.unread{background:#3b82f6}
-.dot.running{width:10px;height:10px;min-width:10px;background:transparent;
-  border:2px solid #3b82f6}
+.dot{display:grid;place-items:center;flex:0 0 14px;width:14px;height:14px}
+.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:#6b7280}
+.dot.unread::before{background:#fbbf24}
+.dot.running::before{display:none}
+.dot svg{display:none;width:13px;height:13px;color:#a4c2f4}
+.dot.running svg{display:block;animation:tab-spin 1s linear infinite}
+@keyframes tab-spin{to{transform:rotate(360deg)}}
 #add,.nav{-webkit-app-region:no-drag;flex:0 0 28px;width:28px;height:28px;border:0;border-radius:9px;
   background:transparent;color:#b9c0cc;cursor:pointer;display:grid;place-items:center;padding:0;
   transition:background-color .14s cubic-bezier(.25,1,.5,1),color .14s cubic-bezier(.25,1,.5,1)}
@@ -643,7 +646,7 @@ svg{shape-rendering:geometricPrecision}
 #bar.light #add,#bar.light .nav{color:#4c5665}
 #bar.light #add:hover,#bar.light .nav:hover{background:#dce2e9;color:#1f2328}
 #bar.light #all{background:#e9ebef;box-shadow:inset 0 0 0 1px #c6cdd7}
-@media(prefers-reduced-motion:reduce){.tab,#add,.nav{transition:none}}
+@media(prefers-reduced-motion:reduce){.tab,#add,.nav{transition:none}.dot.running svg{animation:none}}
 </style></head><body><div id="bar"><div id="tabs" role="tablist"></div><button id="add" title="新建标签页" aria-label="新建标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><div id="nav"><button class="nav" id="left" title="向左滚动标签页" aria-label="向左滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button><button class="nav" id="right" title="向右滚动标签页" aria-label="向右滚动标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button><button class="nav" id="all" title="全部标签页" aria-label="全部标签页"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -1078,10 +1081,15 @@ svg{shape-rendering:geometricPrecision}
 .row.active{background:#2e3440;color:#fff}
 .num{color:#7f8998;font-size:11px;width:18px;flex:0 0 18px}
 .label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dot{width:7px;height:7px;border-radius:50%;background:#687383;flex:0 0 7px}
-.dot.unread{background:#6aa6f5}.dot.running{background:#6aa6f5}
+.dot{display:grid;place-items:center;flex:0 0 14px;width:14px;height:14px}
+.dot::before{content:"";width:8px;height:8px;border-radius:50%;background:#687383}
+.dot.unread::before{background:#fbbf24}
+.dot.running::before{display:none}
+.dot svg{display:none;width:13px;height:13px;color:#a4c2f4}
+.dot.running svg{display:block;animation:tab-spin 1s linear infinite}
+@keyframes tab-spin{to{transform:rotate(360deg)}}
 .check{width:15px;color:#9ec1ff;text-align:center}
-@media(prefers-reduced-motion:reduce){.row{transition:none}}
+@media(prefers-reduced-motion:reduce){.row{transition:none}.dot.running svg{animation:none}}
 </style></head><body><div id="panel"><div id="head">全部标签页</div><div id="list"></div></div></body></html>`;
   return "data:text/html;charset=utf-8," + encodeURIComponent(html);
 }
@@ -1469,7 +1477,7 @@ function startWatchdog() {
 }
 
 // 标签状态轮询: 主进程直接查 pi-web API(不触碰页面, 零渲染开销)
-// 运行中(该标签项目下有会话在跑) -> 旋转圈; 后台标签项目有新动态 -> 蓝点; 其余 -> 灰点
+// 运行中(该标签项目下有会话在跑) -> 蓝色旋转圈; 后台标签项目有新动态 -> 黄点; 其余 -> 灰点
 let statusTimer = null;
 function startStatusPoller() {
   statusTimer = setInterval(async () => {
@@ -1493,7 +1501,7 @@ function startStatusPoller() {
           entry.running = running;
           changed = true;
         }
-        // 后台标签的项目下有会话内容更新 -> 未读蓝点
+        // 后台标签的项目下有会话内容更新 -> 未读黄点
         if (entry.id !== activeTabId && !entry.unread) {
           const latest = Math.max(
             0,
