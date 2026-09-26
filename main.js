@@ -138,6 +138,7 @@ const OVERFLOW_WIDTH = 224;
 const tabs = new Map();
 let tabSeq = 0;
 let activeTabId = null;
+let preparedHome = null;
 let mainWindow = null;
 let stripView = null;
 let stripReady = false;
@@ -742,6 +743,7 @@ function showInitialWindowIfReady() {
   if (!initialWindowShown && stripReady && firstContentReady && mainWindow && !mainWindow.isDestroyed()) {
     initialWindowShown = true;
     mainWindow.show();
+    setTimeout(prepareNextHome, 150);
   }
 }
 
@@ -895,12 +897,11 @@ function wireContentEvents(entry) {
   });
 }
 
-function newTab() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+function createHomeEntry() {
   const id = ++tabSeq;
-  const entry = {
+  return {
     id,
-    content: null, // 后台标签不持有页面实例, 激活时才创建
+    content: null,
     url: tabHomeUrl(),
     project: "",
     cwd: "",
@@ -909,9 +910,22 @@ function newTab() {
     running: false,
     lastSeen: Date.now(),
   };
+}
+
+function prepareNextHome() {
+  if (preparedHome || !mainWindow || mainWindow.isDestroyed()) return;
+  preparedHome = createHomeEntry();
+  ensureTabContent(preparedHome);
+}
+
+function newTab() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const entry = preparedHome || createHomeEntry();
+  preparedHome = null;
   // "+" 位于标签栏末尾，新标签也追加到末尾
-  tabs.set(id, entry);
-  switchTab(id);
+  tabs.set(entry.id, entry);
+  switchTab(entry.id);
+  if (initialWindowShown) setTimeout(prepareNextHome, 150);
 }
 
 function closeTab(id) {
@@ -977,6 +991,8 @@ function createMainWindow() {
   });
   mainWindow.on("closed", () => {
     for (const t of tabs.values()) destroyTabContent(t);
+    if (preparedHome) destroyTabContent(preparedHome);
+    preparedHome = null;
     tabs.clear();
     activeTabId = null;
     if (overflowWin && !overflowWin.isDestroyed()) overflowWin.close();
@@ -1124,24 +1140,46 @@ function projectsFromSessions(data) {
   });
 }
 
+let sessionsRequest = null;
+let homeProjectsSnapshot = null;
+let homeProjectsSignature = "";
+let homeProjectsRefresh = null;
+function fetchSessions() {
+  if (!sessionsRequest) {
+    sessionsRequest = fetch(`http://${APP_URL_HOST}:${serverPort}/api/sessions`)
+      .then((res) => res.json())
+      .finally(() => { sessionsRequest = null; });
+  }
+  return sessionsRequest;
+}
+
 async function fetchProjects() {
   try {
-    const res = await fetch(`http://${APP_URL_HOST}:${serverPort}/api/sessions`);
-    return projectsFromSessions(await res.json());
+    return projectsFromSessions(await fetchSessions());
   } catch {
-    return projectsFromSessions({ sessions: [] });
+    return homeProjectsSnapshot || projectsFromSessions({ sessions: [] });
   }
 }
 
 function sendHomeProjects(projects) {
-  for (const entry of tabs.values()) {
+  homeProjectsSnapshot = projects;
+  const signature = JSON.stringify(projects.map(({ cwd, name, count }) => [cwd, name, count]));
+  if (signature === homeProjectsSignature) return;
+  homeProjectsSignature = signature;
+  for (const entry of [...tabs.values(), preparedHome]) {
+    if (!entry) continue;
     if (entry.url.startsWith("data:text/html") && entry.content && !entry.content.webContents.isDestroyed()) {
       entry.content.webContents.send("app:home-projects", projects);
     }
   }
 }
-async function refreshHomeProjects() {
-  sendHomeProjects(await fetchProjects());
+function refreshHomeProjects() {
+  if (!homeProjectsRefresh) {
+    homeProjectsRefresh = fetchProjects()
+      .then(sendHomeProjects)
+      .finally(() => { homeProjectsRefresh = null; });
+  }
+  return homeProjectsRefresh;
 }
 
 function renameProjectDisplay(cwd, name) {
@@ -1173,6 +1211,7 @@ function renameProjectDisplay(cwd, name) {
 }
 
 function homeEntryForSender(sender) {
+  if (preparedHome?.content?.webContents === sender) return preparedHome;
   return [...tabs.values()].find((t) => t.content && t.content.webContents === sender && t.url.startsWith("data:text/html"));
 }
 
@@ -1232,6 +1271,8 @@ function openProjectInTab(entry, cwd) {
       entry.project = projectDisplayName(cwd);
       entry.cwd = cwd;
       entry.cwdBase = path.basename(cwd);
+      entry.lastSeen = Date.now();
+      entry.unread = false;
       entry.url = url;
       wireContentEvents(entry);
       entry.retiringContent = home;
@@ -1290,10 +1331,8 @@ ipcMain.on("app:reorder-tab", (e, { dragId, targetId }) => {
 ipcMain.on("app:home-ready", async (e) => {
   const entry = homeEntryForSender(e.sender);
   if (!entry) return;
-  const projects = await fetchProjects();
-  if (!e.sender.isDestroyed() && homeEntryForSender(e.sender) === entry) {
-    e.sender.send("app:home-projects", projects);
-  }
+  if (homeProjectsSnapshot) e.sender.send("app:home-projects", homeProjectsSnapshot);
+  else void refreshHomeProjects();
 });
 ipcMain.on("app:home-open-project", (e, cwd) => {
   const entry = homeEntryForSender(e.sender);
@@ -1384,8 +1423,12 @@ function createTray() {
 }
 
 // 托盘菜单动态重建: 「已打开的项目」列出当前标签页
+let trayTabsSignature = "";
 function rebuildTray() {
   if (!tray) return;
+  const signature = JSON.stringify([...tabs.values()].map((entry) => [entry.id, entry.project]));
+  if (signature === trayTabsSignature) return;
+  trayTabsSignature = signature;
   const items = [
     { label: "打开 Pi Desktop", click: () => showMainWindow() },
     { label: "在浏览器中打开", click: () => shell.openExternal(homeUrl()) },
@@ -1483,19 +1526,22 @@ function startStatusPoller() {
   statusTimer = setInterval(async () => {
     if (quitting || !tabs.size) return;
     try {
-      const res = await fetch(`http://${APP_URL_HOST}:${serverPort}/api/sessions`);
-      const data = await res.json();
+      const data = await fetchSessions();
       const runningIds = new Set(data.runningSessionIds || []);
-      const baseName = (cwd) => String(cwd || "").split(/[\\/]/).filter(Boolean).pop();
       const runningCwds = new Set();
+      const latestByCwd = new Map();
       for (const s of data.sessions || []) {
-        if (runningIds.has(s.id)) runningCwds.add(baseName(s.cwd));
+        if (!s.cwd) continue;
+        const key = projectKey(s.cwd);
+        if (runningIds.has(s.id)) runningCwds.add(key);
+        const modified = Date.parse(s.modified) || 0;
+        if (modified > (latestByCwd.get(key) || 0)) latestByCwd.set(key, modified);
       }
-      const now = Date.now();
       let changed = false;
       for (const entry of tabs.values()) {
-        if (!entry.cwdBase) continue;
-        const running = runningCwds.has(entry.cwdBase);
+        if (!entry.cwd) continue;
+        const key = projectKey(entry.cwd);
+        const running = runningCwds.has(key);
         if (running !== !!entry.running) {
           if (entry.running && !running && entry.id !== activeTabId) entry.unread = true;
           entry.running = running;
@@ -1503,12 +1549,7 @@ function startStatusPoller() {
         }
         // 后台标签的项目下有会话内容更新 -> 未读黄点
         if (entry.id !== activeTabId && !entry.unread) {
-          const latest = Math.max(
-            0,
-            ...(data.sessions || [])
-              .filter((s) => baseName(s.cwd) === entry.cwdBase)
-              .map((s) => Date.parse(s.modified) || 0)
-          );
+          const latest = latestByCwd.get(key) || 0;
           if (latest > entry.lastSeen) {
             entry.unread = true;
             changed = true;
