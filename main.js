@@ -713,21 +713,24 @@ function layoutWindow() {
   const [w, h] = mainWindow.getContentSize();
   if (stripView) stripView.setBounds({ x: 0, y: 0, width: w, height: STRIP_HEIGHT });
   const active = tabs.get(activeTabId);
-  if (active?.content) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
+  if (active?.content && active.homeReady) active.content.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
   if (active?.pendingContent) active.pendingContent.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
-  const visible = mainWindow.contentView.children.find((view) => view !== stripView);
+  const loading = new Set([...tabs.values(), preparedHome].filter(Boolean).flatMap((t) => [!t.homeReady && t.content, t.pendingContent]).filter(Boolean));
+  const visible = mainWindow.contentView.children.find((view) => view !== stripView && view !== preparedHome?.content && !loading.has(view));
   if (visible && visible !== active?.content) visible.setBounds({ x: 0, y: STRIP_HEIGHT, width: w, height: h - STRIP_HEIGHT });
 }
 
 function showTabView(entry) {
   if (!mainWindow || mainWindow.isDestroyed() || !entry.content) return;
   layoutWindow();
-  if (entry.pendingContent && !mainWindow.contentView.children.includes(entry.pendingContent)) {
-    const index = mainWindow.contentView.children.indexOf(entry.content);
-    mainWindow.contentView.addChildView(entry.pendingContent, index < 0 ? undefined : index);
-  }
   if (!mainWindow.contentView.children.includes(entry.content)) mainWindow.contentView.addChildView(entry.content);
-  const keep = new Set([stripView, entry.content, entry.pendingContent]);
+  if (entry.pendingContent && !mainWindow.contentView.children.includes(entry.pendingContent)) {
+    mainWindow.contentView.addChildView(entry.pendingContent);
+  }
+  const keep = new Set([stripView, entry.content, entry.pendingContent, preparedHome?.content]);
+  for (const tab of tabs.values()) {
+    if (!tab.homeReady && tab.content) keep.add(tab.content);
+  }
   for (const view of [...mainWindow.contentView.children]) {
     if (!keep.has(view)) mainWindow.contentView.removeChildView(view);
   }
@@ -794,6 +797,8 @@ function ensureTabContent(entry) {
   content.setBackgroundColor("#1b1d22");
   entry.content = content;
   entry.homeReady = !entry.url.startsWith("data:text/html");
+  content.setBounds({ x: 0, y: STRIP_HEIGHT, width: 1, height: 1 });
+  mainWindow.contentView.addChildView(content);
   wireContentEvents(entry);
   content.webContents.loadURL(entry.url);
 }
@@ -823,7 +828,7 @@ function wireContentEvents(entry) {
   content.webContents.on("page-title-updated", (e, title) => {
     e.preventDefault();
     if (entry.url.startsWith("data:text/html")) return;
-    entry.project = entry.cwd && getProjectPreferences().names[projectKey(entry.cwd)]
+    entry.project = entry.cwd
       ? projectDisplayName(entry.cwd)
       : title.replace(/\s*-\s*Pi Web\s*$/i, "").trim();
     if (entry.id === activeTabId) {
@@ -861,6 +866,8 @@ function wireContentEvents(entry) {
         showTabView(entry);
         firstContentReady = true;
         showInitialWindowIfReady();
+      } else if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(content)) {
+        mainWindow.contentView.removeChildView(content);
       }
     }
     // 抓取项目路径按钮文本, 提取项目目录名(供状态轮询匹配)
@@ -961,7 +968,8 @@ function createMainWindow() {
     titleBarOverlay: { color: "#101010", symbolColor: "#dbe4f0", height: STRIP_HEIGHT },
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   });
-  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent('<html style="height:100%;background:#1b1d22"><body style="margin:0"></body></html>'));
+  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent('<html lang="zh-CN" style="height:100%;background:#1b1d22"><body style="margin:0;height:100%;display:grid;place-items:center;color:#8f98a8;font:14px Microsoft YaHei,sans-serif">Pi Desktop 正在启动…</body></html>'));
+  mainWindow.show();
 
   stripView = new WebContentsView({
     webPreferences: {
@@ -1229,17 +1237,21 @@ function openProjectInTab(entry, cwd) {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      backgroundThrottling: false,
       partition: `tab-${entry.id}`,
     },
   });
-  pending.setBackgroundColor("#1b1d22");
+  pending.setBackgroundColor("#00000000");
   entry.pendingContent = pending;
-  if (entry.id === activeTabId) showTabView(entry);
+  const [width, height] = mainWindow.getContentSize();
+  pending.setBounds({ x: 0, y: STRIP_HEIGHT, width, height: height - STRIP_HEIGHT });
+  mainWindow.contentView.addChildView(pending);
   home.webContents.send("app:home-opening", cwd);
   let finished = false;
   const fail = () => {
     if (finished || entry.pendingContent !== pending) return;
     finished = true;
+    clearTimeout(timeout);
     entry.pendingContent = null;
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.contentView.children.includes(pending)) {
       mainWindow.contentView.removeChildView(pending);
@@ -1247,6 +1259,7 @@ function openProjectInTab(entry, cwd) {
     pending.webContents.close();
     if (!home.webContents.isDestroyed()) home.webContents.send("app:home-open-failed", cwd);
   };
+  const timeout = setTimeout(fail, 20000);
   pending.webContents.on("did-fail-load", (_e, code, _description, _url, mainFrame) => {
     if (code !== -3 && mainFrame) fail();
   });
@@ -1266,6 +1279,8 @@ function openProjectInTab(entry, cwd) {
       if (!ready) return fail();
       if (finished || entry.pendingContent !== pending || !tabs.has(entry.id)) return;
       finished = true;
+      clearTimeout(timeout);
+      pending.webContents.setBackgroundThrottling(true);
       entry.pendingContent = null;
       entry.content = pending;
       entry.project = projectDisplayName(cwd);
@@ -1280,6 +1295,8 @@ function openProjectInTab(entry, cwd) {
         showTabView(entry);
         mainWindow.setTitle(`Pi Desktop - ${entry.project} | Powered by Pi`);
         void syncTabColor(entry, pending);
+      } else if (mainWindow.contentView.children.includes(pending)) {
+        mainWindow.contentView.removeChildView(pending);
       }
       if (entry.retiringContent && !mainWindow.contentView.children.includes(home)) {
         home.webContents.close();
