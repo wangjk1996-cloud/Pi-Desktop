@@ -6,7 +6,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 
 - 仓库：https://github.com/wangjk1996-cloud/Pi-Desktop
 - 本地路径：`C:\Users\Leo\Documents\GitHub\Pi-Desktop`
-- 当前版本：v1.7.8
+- 当前版本：v1.7.9
 - 环境：Windows 11、Git Bash、Node 24、Electron 39、electron-builder 26
 
 ## 1. 架构（读代码前先看这个）
@@ -34,6 +34,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 - 首页采用居中的内容列：Logo 与品牌名、按本地时间变化的问候、主要「打开项目目录」按钮、最近项目列表。品牌名采用与图标中的 π 一致的 Times New Roman Bold 字形；Logo 不加白色描边。首页问候分为九个时段，每段三句，按日期轮换；跨时段自动更新。首页本身固定在窗口可视区内，最近项目列表占用剩余空间并在内部滚动；不能让整个页面右侧出现滚动条。品牌和问候位置固定。主窗口先显示深色启动页，首页视图加载时以 1px 挂载，完成后展开；后台预载完成后卸下。切换到尚未就绪的新首页时保留旧视图。首页进入 pi-web 时另建同分区透明内容视图置于上层，等工作区项目路径出现在页面后再替换首页；20 秒内未完成则返回首页并允许重试。壳界面只使用短促的颜色反馈和拖动排序位移，避免整页过渡和按钮弹跳，并遵从系统“减少动态效果”设置。溢出标签菜单可滚动，但不显示突兀的滚动条；收到状态更新时保留列表位置，内容渲染完成后才显示菜单。
 - 首页项目可拖动排序、修改显示名称、从最近项目移除；改名和移除在项目卡片内显示明确的保存/移除与取消按钮，失焦不自动保存。移除不删除目录或会话，再次打开目录会恢复列表条目。已打开的标签同步使用显示名称，双击标签名也可改名。所有已打开的首页会同步更新项目列表、顺序和名称；无会话的新项目也会显示。设置及打开过的目录保存在 `%APPDATA%\pi-desktop-app\project-preferences.json`，不移动文件夹、不修改 pi-web 会话数据。
 - 后台标签保持存活但从窗口卸下（`removeChildView`），不切回零绘制开销。
+- pi-web 内部切换目录时，标签的完整路径、显示名称、窗口标题和所有首页实时同步；切换后的改名、运行状态均按新目录匹配。壳通过每个标签独立 Session 的 `/api/worktrees?cwd=` 请求读取当前完整目录，并同步页内导航中的 `?cwd=`。pi-web 0.9.3 的目录选择、工作树和会话切换都会发起此请求；只浏览目录不会改变标签。不要仅依赖页面标题、项目根目录按钮或完整页面跳转，它们无法区分同名目录或工作树。升级 pi-web 后须重新实测目录切换。
 - pi-web 官方 URL 参数：`/?cwd=<路径>` 直达项目工作区（跳过项目选择）；`/?session=<id>` 直达会话。
 
 ## 2. 三层自动更新
@@ -50,6 +51,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 cd /c/Users/Leo/Documents/GitHub/Pi-Desktop
 npm install                      # 装依赖（Electron 若没下载二进制，先 npm install-scripts approve electron && npm rebuild electron）
 node -e "new Function(require('fs').readFileSync('main.js','utf8'))"   # 语法快检
+npm run test:project-sync         # 隔离 Electron 回归：目录实时同步、同名路径、首页改名、多标签和工作树
 npm run dist                     # 打包 → dist/PiDesktop-<版本>-setup.exe（已配置 normal 压缩）
 cmd //c "dist\PiDesktop-<版本>-setup.exe /S"   # 静默安装（必须走 cmd，见坑 #5）
 cmd //c start "" "C:\Users\Leo\AppData\Local\Programs\Pi Desktop\Pi Desktop.exe"

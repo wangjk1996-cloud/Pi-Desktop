@@ -822,8 +822,36 @@ function switchTab(id) {
   if (t.url.startsWith("data:text/html")) void refreshHomeProjects();
 }
 
+function syncTabProject(entry, cwd) {
+  if (!cwd || cwd === entry.cwd) return;
+  entry.cwd = cwd;
+  entry.cwdBase = path.basename(cwd);
+  entry.project = projectDisplayName(cwd);
+  entry.lastSeen = Date.now();
+  entry.running = false;
+  entry.unread = false;
+  if (entry.id === activeTabId) {
+    mainWindow.setTitle(`Pi Desktop - ${entry.project} | Powered by Pi`);
+  }
+  pushTabState();
+  recordOpenedProject(cwd);
+}
+
 function wireContentEvents(entry) {
   const { content } = entry;
+
+  // pi-web 内部切换目录不重新加载页面；该请求使用当前完整工作目录。
+  content.webContents.session.webRequest.onBeforeRequest(
+    { urls: [`http://${APP_URL_HOST}:*/api/worktrees*`] },
+    (details, callback) => {
+      callback({});
+      if (!tabs.has(entry.id) || entry.content?.webContents.id !== details.webContentsId) return;
+      const url = new URL(details.url);
+      if (details.method === "GET" && url.pathname === "/api/worktrees" && url.port === String(serverPort)) {
+        syncTabProject(entry, url.searchParams.get("cwd"));
+      }
+    }
+  );
 
   content.webContents.on("page-title-updated", (e, title) => {
     e.preventDefault();
@@ -842,20 +870,18 @@ function wireContentEvents(entry) {
     }
     pushTabState();
   });
-  content.webContents.on("did-navigate", (_e, navUrl) => {
+  const syncNavigation = (navUrl) => {
     entry.url = navUrl;
     try {
       const cwd = new URL(navUrl).searchParams.get("cwd");
-      if (cwd && cwd !== entry.cwd) {
-        entry.cwd = cwd;
-        entry.cwdBase = path.basename(cwd);
-        entry.project = projectDisplayName(cwd);
-        pushTabState();
-        recordOpenedProject(cwd);
-      }
+      syncTabProject(entry, cwd);
     } catch {
       /* 首页 data URL 不含项目路径 */
     }
+  };
+  content.webContents.on("did-navigate", (_e, navUrl) => syncNavigation(navUrl));
+  content.webContents.on("did-navigate-in-page", (_e, navUrl, isMainFrame) => {
+    if (isMainFrame) syncNavigation(navUrl);
   });
 
   // 内容加载后同步标签条/原生按钮配色, 与 pi-web 顶栏协调

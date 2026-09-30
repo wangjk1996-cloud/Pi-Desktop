@@ -1,6 +1,6 @@
 {
   "name": "pi-desktop-app",
-  "version": "1.7.8",
+  "version": "1.7.9",
   "description": "pi coding agent 的 Windows 桌面客户端，提供多项目标签页、托盘驻留和自动更新。",
   "author": "wangjk1996-cloud",
   "license": "MIT",
@@ -8,6 +8,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test:project-sync": "node scripts/test-project-sync.cjs",
     "dist": "electron-builder --win",
     "release": "electron-builder --win --publish always"
   },
