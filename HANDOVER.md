@@ -6,7 +6,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 
 - 仓库：https://github.com/wangjk1996-cloud/Pi-Desktop
 - 本地路径：`C:\Users\Leo\Documents\GitHub\Pi-Desktop`
-- 当前版本：v1.7.9
+- 当前版本：v1.7.10
 - 环境：Windows 11、Git Bash、Node 24、Electron 39、electron-builder 26
 
 ## 1. 架构（读代码前先看这个）
@@ -14,11 +14,11 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 ### 进程模型
 - `main.js`：Electron 主进程，负责一切（内核管理、服务拉起、窗口、标签、托盘、更新）。
 - pi-web 服务：以子进程运行，用 **Electron 内置 Node 运行时**（`ELECTRON_RUN_AS_NODE=1`，`spawn(process.execPath, [pi-web.js, "--no-open", "-p", port])`），**不依赖用户本机 Node**。仅监听 127.0.0.1。
-- 端口策略：30141 空闲则起内置服务；被外部 pi-web 占用则复用（此时 watchdog 每 5s 盯防，外部死了自动起内置服务接管）。
+- 端口策略：30141 空闲则起内置服务；已被占用则另选空闲端口。桌面客户端始终使用自己的私有组件，不复用命令行旧服务。退出时先结束自己的整个服务进程树，再退出客户端，避免遗留 Next 子进程锁住组件目录；不停止用户的命令行服务。
 
 ### 内核与 npm 运行时（都在用户数据目录，不在安装目录）
 - 用户数据目录：`%APPDATA%\pi-desktop-app\`
-- `kernel/`：私有 npm prefix，装 `@agegr/pi-web` + `@earendil-works/pi-coding-agent`，首次启动下载（有进度窗口）。
+- `kernel/`：私有 npm prefix，装 `@agegr/pi-web` + `@earendil-works/pi-coding-agent`。每次启动服务前分别检查两者的 latest 版本，仅更新有变化的组件；已有完整组件时，版本检查断网不阻止启动。首次安装、组件更新和组件修复使用独立标题、简短提示及版本列表；安装后核对实际版本，再启动服务。组件检查、安装与失败详情写入 `update.log`。
 - `npm-runtime/`：内置 npm（打包时以 `vendor/npm-runtime.tar.gz` 携带，首次需要时用 `C:\Windows\System32\tar.exe` 解压）。**必须用系统 tar 的绝对路径**（见坑 #2）。
 - 日志：`pi-desktop-server.log`（服务）、`update.log`（更新），超 5MB 自动截断。
 
@@ -34,15 +34,15 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 - 首页采用居中的内容列：Logo 与品牌名、按本地时间变化的问候、主要「打开项目目录」按钮、最近项目列表。品牌名采用与图标中的 π 一致的 Times New Roman Bold 字形；Logo 不加白色描边。首页问候分为九个时段，每段三句，按日期轮换；跨时段自动更新。首页本身固定在窗口可视区内，最近项目列表占用剩余空间并在内部滚动；不能让整个页面右侧出现滚动条。品牌和问候位置固定。主窗口先显示深色启动页，首页视图加载时以 1px 挂载，完成后展开；后台预载完成后卸下。切换到尚未就绪的新首页时保留旧视图。首页进入 pi-web 时另建同分区透明内容视图置于上层，等工作区项目路径出现在页面后再替换首页；20 秒内未完成则返回首页并允许重试。壳界面只使用短促的颜色反馈和拖动排序位移，避免整页过渡和按钮弹跳，并遵从系统“减少动态效果”设置。溢出标签菜单可滚动，但不显示突兀的滚动条；收到状态更新时保留列表位置，内容渲染完成后才显示菜单。
 - 首页项目可拖动排序、修改显示名称、从最近项目移除；改名和移除在项目卡片内显示明确的保存/移除与取消按钮，失焦不自动保存。移除不删除目录或会话，再次打开目录会恢复列表条目。已打开的标签同步使用显示名称，双击标签名也可改名。所有已打开的首页会同步更新项目列表、顺序和名称；无会话的新项目也会显示。设置及打开过的目录保存在 `%APPDATA%\pi-desktop-app\project-preferences.json`，不移动文件夹、不修改 pi-web 会话数据。
 - 后台标签保持存活但从窗口卸下（`removeChildView`），不切回零绘制开销。
-- pi-web 内部切换目录时，标签的完整路径、显示名称、窗口标题和所有首页实时同步；切换后的改名、运行状态均按新目录匹配。壳通过每个标签独立 Session 的 `/api/worktrees?cwd=` 请求读取当前完整目录，并同步页内导航中的 `?cwd=`。pi-web 0.9.3 的目录选择、工作树和会话切换都会发起此请求；只浏览目录不会改变标签。不要仅依赖页面标题、项目根目录按钮或完整页面跳转，它们无法区分同名目录或工作树。升级 pi-web 后须重新实测目录切换。
+- pi-web 内部切换目录时，标签的完整路径、显示名称、窗口标题和所有首页实时同步；切换后的改名、运行状态均按新目录匹配。壳通过每个标签独立 Session 的 `/api/worktrees?cwd=` 请求读取当前完整目录，并同步页内导航中的 `?cwd=`。已实测 pi-web 0.9.3 与 0.10.0 的目录选择；工作树和会话切换也使用当前目录请求。只浏览目录不会改变标签。不要仅依赖页面标题、项目根目录按钮或完整页面跳转，它们无法区分同名目录或工作树。升级 pi-web 后须重新实测目录切换。
 - pi-web 官方 URL 参数：`/?cwd=<路径>` 直达项目工作区（跳过项目选择）；`/?session=<id>` 直达会话。
 
 ## 2. 三层自动更新
 
 | 层 | 对象 | 机制 |
 |---|---|---|
-| 内核 | 私有 kernel 的 pi/pi-web | 退出应用时（服务停止后）npm view 比对版本，静默更新，下次启动生效 |
-| 全局工具 | 用户全局 npm 的 pi/pi-web（命令行用） | 启动 8s 后后台 `npm install -g ...@latest`（npmmirror 源）；仅当全局已安装；成功才记录节流时间（4h） |
+| 内核 | 私有 kernel 的 pi/pi-web | 启动服务前通过 npmmirror 的 latest 元数据分别比对版本，有变化时显示组件更新窗口；安装指定版本并核对后启动 |
+| 全局工具 | 用户全局 npm 的 pi/pi-web（命令行用） | 启动 8s 后后台逐个检查并安装已存在工具的新版本（npmmirror 源）；一个工具被占用不阻止另一个；全部成功才记录节流时间（4h） |
 | 壳 | 应用本身 | electron-updater → GitHub Releases（repo: `wangjk1996-cloud/Pi-Desktop`），下载完弹窗"立即重新启动/稍后" |
 
 ## 3. 构建 / 测试 / 发布（照抄即可）
@@ -52,6 +52,7 @@ cd /c/Users/Leo/Documents/GitHub/Pi-Desktop
 npm install                      # 装依赖（Electron 若没下载二进制，先 npm install-scripts approve electron && npm rebuild electron）
 node -e "new Function(require('fs').readFileSync('main.js','utf8'))"   # 语法快检
 npm run test:project-sync         # 隔离 Electron 回归：目录实时同步、同名路径、首页改名、多标签和工作树
+npm run test:component-update     # 独立组件更新、三种提示、离线启动、全局占用隔离、服务进程树退出
 npm run dist                     # 打包 → dist/PiDesktop-<版本>-setup.exe（已配置 normal 压缩）
 cmd //c "dist\PiDesktop-<版本>-setup.exe /S"   # 静默安装（必须走 cmd，见坑 #5）
 cmd //c start "" "C:\Users\Leo\AppData\Local\Programs\Pi Desktop\Pi Desktop.exe"
@@ -71,7 +72,7 @@ Release 标题、正文和资产规则见第 7 节。上传 `PiDesktop-X.Y.Z-set
 
 1. **electron-builder 的 extraResources 会过滤裸目录里的 node_modules** → 内置 npm 必须打 tar.gz 携带，运行时解压。
 2. **Git Bash 的 GNU tar 把 `C:\...` 当远程主机**（"Cannot connect to C:"）→ 永远用 `C:\Windows\System32\tar.exe` 绝对路径。
-3. **运行中的服务锁目录（EBUSY）** → 更新内核只能在服务停止后（所以放在退出时做）。
+3. **运行中的服务锁目录（EBUSY）** → 私有组件统一在启动服务前更新，退出时结束整个服务进程树。命令行工具逐个更新，被占用的工具留待下次检查，不结束用户正在运行的命令行会话。
 4. **Windows 图标缓存** → 换图标后桌面图标不变，需 `ie4uinit.exe -show` 或清 iconcache 重启 explorer。
 5. **NSIS 静默安装**要用 `cmd //c "xxx.exe /S"`；直接 `./xxx.exe /S` 在 Git Bash 里会莫名失败。
 6. **PowerShell 脚本文件不能含中文注释**（无 BOM 的 UTF-8 会被按 GBK 解析，注释乱码吞掉下一行）。
@@ -85,6 +86,8 @@ Release 标题、正文和资产规则见第 7 节。上传 `PiDesktop-X.Y.Z-set
 14. cmd 的 `/min` 之类开关在 Git Bash 里会被转成路径 → 写成 `//min`。
 15. 机器可用虚拟内存不足时，NSIS 默认最高压缩会报 `7za.exe ... Can't allocate required memory` → `package.json` 已设置 `compression: normal`；仍不足时先关闭自己的 Pi Desktop 测试进程，不要结束用户的其他应用。
 16. Electron 39 中隐藏窗口或未挂载的 `WebContentsView` 加载可能停滞 → 启动时先显示深色页；首页和预载视图加载期间挂到可见窗口，项目页使用透明的上层视图。不要等加载完成后才挂载。
+17. **内置组件已更新但界面仍是旧版** → v1.7.9 会复用默认端口上的命令行服务；该服务可能还在运行旧版。v1.7.10 起始终启动私有服务，端口被占用时换端口。不要只看磁盘包版本，应核对客户端实际使用的服务进程及 `/api/app-update` 中的 `currentVersion`。
+18. **只比较 Pi Web 会漏掉 Pi 单独更新；退出更新与再次打开可重叠安装** → 两个组件分别检查，安装统一在启动服务前执行。不要恢复退出时安装或把组件修复显示成“仅首次运行”。
 
 ## 5. 甲方的硬性要求（UX 红线，别回归）
 

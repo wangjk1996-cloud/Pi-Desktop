@@ -141,7 +141,7 @@ const migrationEnd = source.indexOf("const DEFAULT_PORT");
 assert(migrationStart >= 0 && migrationEnd > migrationStart);
 source = source.slice(0, migrationStart) +
   'app.setPath("userData", path.join(__dirname, "data"));\n' + source.slice(migrationEnd);
-const startupStart = source.indexOf("    try {\n      // 1. 首次运行:");
+const startupStart = source.indexOf("    try {\n", source.indexOf("app.whenReady().then"));
 const startupEnd = source.indexOf("    createMainWindow();", startupStart);
 assert(startupStart >= 0 && startupEnd > startupStart);
 source = source.slice(0, startupStart) +
@@ -149,7 +149,6 @@ source = source.slice(0, startupStart) +
   source.slice(startupEnd);
 source = source.replace("    createTray();", "");
 source = source.replace("    setupShellAutoUpdate();", "");
-source = source.replace("    startWatchdog();", "");
 source = source.replace("    setTimeout(() => backgroundGlobalToolsUpdate(), 8000);",
   "    (" + runTests.toString() + ")(testSetup).then(() => app.exit(0)).catch(error => { console.error(error); app.exit(1); });");
 fs.writeFileSync(path.join(root, "main.js"), source);

@@ -1,7 +1,6 @@
 // Pi Desktop —— Electron 主进程
 // 职责:
-//   1. 内核: pi-web 私有副本, 首次运行自动下载; 每次退出应用时检查官方新版,
-//      有新版则静默更新(此时服务已停, 无文件锁), 下次启动自动生效
+//   1. 内核: 私有 pi / pi-web, 启动服务前分别检查并更新, 首次安装与更新独立提示
 //   2. 顺带更新: 本机全局 npm 里的 pi / pi-web(cmd 用的那两个)在启动后后台更新,
 //      被占用更新失败就下次再试, 不影响应用本身
 //   3. 服务: 用 Electron 内置 Node 运行时起 pi-web, 不依赖本机 Node.js
@@ -49,7 +48,6 @@ const NPM_REGISTRY = "https://registry.npmmirror.com";
 const PI_WEB_PKG = "@agegr/pi-web";
 const PI_AGENT_PKG = "@earendil-works/pi-coding-agent";
 const GLOBAL_TOOLS_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000; // 全局工具更新检查最小间隔
-const QUIT_UPDATE_TIMEOUT_MS = 3 * 60 * 1000; // 退出时内核更新最长耗时
 
 // ---------------------------------------------------------------------------
 // 路径与状态
@@ -59,9 +57,6 @@ function privatePrefix() {
 }
 function kernelBin() {
   return path.join(privatePrefix(), "node_modules", "@agegr", "pi-web", "bin", "pi-web.js");
-}
-function kernelPkgJson() {
-  return path.join(privatePrefix(), "node_modules", "@agegr", "pi-web", "package.json");
 }
 function globalPrefix() {
   return path.join(process.env.APPDATA || "", "npm");
@@ -128,9 +123,6 @@ let tray = null;
 let serverProcess = null;
 let serverPort = DEFAULT_PORT;
 let quitting = false;
-let quitUpdateDone = false;
-let reusedExternal = false; // 当前复用的是外部 pi-web 服务(可能随时退出)
-let watchdog = null;
 
 // 标签页: id -> { id, content, url, project, cwd, cwdBase, unread, running, lastSeen }
 const STRIP_HEIGHT = 40;
@@ -180,26 +172,6 @@ function getFreePort() {
   });
 }
 
-function portResponds(port, timeoutMs = 1500) {
-  return new Promise((resolve) => {
-    const req = http.get(
-      { host: APP_URL_HOST, port, path: "/", timeout: 1000 },
-      (res) => {
-        res.resume();
-        resolve(true);
-      }
-    );
-    req.on("error", () => resolve(false));
-    req.on("timeout", () => {
-      req.destroy();
-      resolve(false);
-    });
-    setTimeout(() => {
-      req.destroy();
-      resolve(false);
-    }, timeoutMs);
-  });
-}
 
 function isPortFree(port) {
   return new Promise((resolve) => {
@@ -305,19 +277,20 @@ async function npmInstall(prefix, packages, useGlobalFlag) {
 }
 
 async function npmLatestVersion(pkg) {
-  const cli = await ensureNpmRuntime();
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      [cli, "view", `${pkg}@latest`, "version", `--registry=${NPM_REGISTRY}`],
-      { env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
-    );
-    let out = "";
-    child.stdout.on("data", (d) => (out += d.toString()));
-    child.on("error", () => resolve(null));
-    child.on("exit", (code) => resolve(code === 0 ? out.trim() || null : null));
-  });
+  try {
+    const response = await fetch(NPM_REGISTRY + "/" + encodeURIComponent(pkg) + "/latest", {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const metadata = await response.json();
+    if (typeof metadata.version !== "string" || !metadata.version) throw new Error("未返回组件版本");
+    return metadata.version;
+  } catch (err) {
+    appendLog(updateLogFile(), new Date().toISOString() + " 版本检查失败 " + pkg + ": " + err.message + "\n");
+    return null;
+  }
 }
+
 
 // pi-web 的 postinstall(prepare-terminal)可能被本机 npm 的脚本审批机制拦截,
 // 安装/更新后手动补跑一次, 保证终端组件就位
@@ -344,74 +317,84 @@ function runPrepareTerminal(prefix) {
 }
 
 // ---------------------------------------------------------------------------
-// 内核: 首次安装 / 退出时更新
+// 内核: 启动前分别检查 Pi Web 和 Pi, 安装完成后启动私有服务
 // ---------------------------------------------------------------------------
-function kernelVersion() {
+function componentVersion(prefix, pkg) {
   try {
-    return JSON.parse(fs.readFileSync(kernelPkgJson(), "utf8")).version || null;
+    return JSON.parse(fs.readFileSync(path.join(prefix, "node_modules", ...pkg.split("/"), "package.json"), "utf8")).version || null;
   } catch {
     return null;
   }
 }
 
-// 首次运行: 私有内核不存在 -> 显示初始化窗口, 下载 pi-web
-async function firstRunInstall() {
+function componentWindowHtml(mode, components) {
+  const icon = fs.readFileSync(appIcon()).toString("base64");
+  const labels = {
+    install: ["首次安装", "正在安装组件", "安装完成后将自动启动。"],
+    update: ["组件更新", "正在更新组件", "更新完成后将自动启动。"],
+    repair: ["组件修复", "正在修复组件", "修复完成后将自动启动。"],
+  };
+  const [label, heading, detail] = labels[mode];
+  const rows = components.map(({ name, current, latest }) => {
+    const version = latest && latest !== current ? (current ? current + " → " : "") + latest : current || "最新版";
+    return '<div class="component"><span>' + name + '</span><span class="version">' + version + '</span></div>';
+  }).join("");
+  return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>' +
+    'html,body{margin:0;background:#1b1d22;color:#eff1f5;font-family:"Segoe UI","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}' +
+    'body{padding:28px 32px;box-sizing:border-box}.brand{display:flex;align-items:center;gap:11px;margin-bottom:26px}' +
+    '.mark{width:34px;height:34px;display:block}' +
+    '.brand-name{font-size:19px;font-weight:600}.badge{margin-left:auto;color:#959ba6;font-size:12px}' +
+    'h1{margin:0 0 7px;font-size:21px;font-weight:600}p{margin:0;color:#a8aeb9;font-size:13px;line-height:1.6}' +
+    '.components{margin:18px 0;border-top:1px solid #ffffff0d;padding-top:8px}.component{display:flex;justify-content:space-between;padding:7px 0;font-size:13px}' +
+    '.version{color:#9299a5;font-size:12px}.track{height:3px;background:#ffffff0e;border-radius:3px;overflow:hidden}' +
+    '.track:after{content:"";display:block;width:35%;height:100%;border-radius:3px;background:#8baeff;animation:progress 1.8s ease-in-out infinite}' +
+    '@keyframes progress{from{transform:translateX(-100%)}to{transform:translateX(290%)}}' +
+    '@media(prefers-reduced-motion:reduce){.track:after{animation:none}}.foot{margin-top:12px;font-size:12px;color:#7d8592}' +
+    '</style></head><body><div class="brand"><img class="mark" alt="" src="data:image/x-icon;base64,' + icon + '"><span class="brand-name">Pi Desktop</span><span class="badge">' + label +
+    '</span></div><h1>' + heading + '</h1><p>' + detail + '</p><div class="components">' + rows +
+    '</div><div class="track" role="progressbar" aria-label="' + heading + '"></div><p class="foot" id="stage">请保持网络连接。</p></body></html>';
+}
+
+async function installKernel(mode, components) {
   const win = new BrowserWindow({
-    width: 460,
-    height: 260,
-    resizable: false,
-    maximizable: false,
-    minimizable: false,
-    autoHideMenuBar: true,
-    title: "Pi Desktop",
-    backgroundColor: "#0b1220",
+    width: 440, height: 316, useContentSize: true, resizable: false, maximizable: false, minimizable: false,
+    closable: false, autoHideMenuBar: true, title: "Pi Desktop - " + { install: "首次安装", update: "组件更新", repair: "组件修复" }[mode],
+    backgroundColor: "#1b1d22", icon: appIcon(),
   });
-  win.loadURL(
-    "data:text/html;charset=utf-8," +
-      encodeURIComponent(
-        `<body style="margin:0;background:#0b1220;color:#dbe4f0;font-family:sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh">
-          <h2 style="margin:0 0 12px">Pi Desktop</h2>
-          <p style="margin:0;color:#8fa3bf">正在初始化必要组件，请保持网络连接。</p>
-          <p style="color:#5b6b84;font-size:12px">此过程仅在首次运行时执行。</p>
-        </body>`
-      )
-    );
-  const ok = await npmInstall(
-    privatePrefix(),
-    [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
-    false
-  );
-  if (ok) await runPrepareTerminal(privatePrefix());
   try {
+    await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(componentWindowHtml(mode, components)));
+    const packages = components.filter(({ current, latest }) => mode !== "update" || (latest && latest !== current))
+      .map(({ pkg, latest }) => pkg + "@" + (latest || "latest"));
+    const ok = await npmInstall(privatePrefix(), packages, false);
+    if (!ok) throw new Error("组件" + { install: "安装", update: "更新", repair: "修复" }[mode] + "未完成。请检查网络连接后重试。");
+    await win.webContents.executeJavaScript('document.getElementById("stage").textContent = "正在完成配置…"');
+    await runPrepareTerminal(privatePrefix());
+    for (const component of components) {
+      const actual = componentVersion(privatePrefix(), component.pkg);
+      if (!actual || (component.latest && component.latest !== actual)) throw new Error("组件版本验证未通过。请重新启动后重试。");
+      appendLog(updateLogFile(), new Date().toISOString() + " 组件就绪 " + component.name + " " + actual + "\n");
+    }
+    if (!fs.existsSync(kernelBin())) throw new Error("组件配置未完成。请重新启动后重试。");
+  } finally {
     win.destroy();
-  } catch {
-    /* ignore */
-  }
-  if (!ok || !fs.existsSync(kernelBin())) {
-    throw new Error(
-      "初始化失败：组件下载未完成，请检查网络连接后重试。\n日志文件：" + updateLogFile()
-    );
   }
 }
 
-// 退出时更新内核: 此刻服务已停, 文件无锁, 安静替换
-async function updateKernelOnQuit() {
-  try {
-    const cur = kernelVersion();
-    const latest = await npmLatestVersion(PI_WEB_PKG);
-    appendLog(updateLogFile(), `${new Date().toISOString()} 退出检查: 当前=${cur} 最新=${latest}\n`);
-    if (!latest || latest === cur) return;
-    appendLog(updateLogFile(), `发现新版本 ${latest}, 退出前更新内核...\n`);
-    const ok = await npmInstall(
-    privatePrefix(),
-    [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
-    false
-  );
-    if (ok) await runPrepareTerminal(privatePrefix());
-  } catch (err) {
-    appendLog(updateLogFile(), `退出更新异常(忽略): ${err && err.message}\n`);
+async function prepareKernel() {
+  const components = [{ name: "Pi Web", pkg: PI_WEB_PKG }, { name: "Pi", pkg: PI_AGENT_PKG }];
+  for (const component of components) component.current = componentVersion(privatePrefix(), component.pkg);
+  await Promise.all(components.map(async (component) => {
+    component.latest = await npmLatestVersion(component.pkg);
+    appendLog(updateLogFile(), new Date().toISOString() + " 组件检查 " + component.name + ": 当前=" + component.current + " 最新=" + component.latest + "\n");
+  }));
+  if (!fs.existsSync(kernelBin()) || components.some(({ current }) => !current)) {
+    const installed = components.some(({ current }) => current) || fs.existsSync(path.join(privatePrefix(), "package.json"));
+    await installKernel(installed ? "repair" : "install", components);
+  } else if (components.some(({ current, latest }) => latest && latest !== current)) {
+    await installKernel("update", components);
   }
 }
+
 
 // 启动后后台更新本机全局 npm 里的 pi / pi-web(cmd 用的两个工具)
 // 被占用(EBUSY)或断网就下次再试, 永远不影响应用本身
@@ -426,14 +409,20 @@ async function backgroundGlobalToolsUpdate() {
     }
     if (Date.now() - last < GLOBAL_TOOLS_UPDATE_INTERVAL_MS) return;
 
-    // 成功后才记录时间, 失败(占用/断网)下次启动立即重试
-    const ok = await npmInstall(
-      globalPrefix(),
-      [`${PI_WEB_PKG}@latest`, `${PI_AGENT_PKG}@latest`],
-      true
-    );
+    const packages = [PI_WEB_PKG, PI_AGENT_PKG].filter(globalHas);
+    let ok = true;
+    for (const pkg of packages) {
+      const latest = await npmLatestVersion(pkg);
+      if (!latest) { ok = false; continue; }
+      if (latest === componentVersion(globalPrefix(), pkg)) continue;
+      const installed = await npmInstall(globalPrefix(), [pkg + "@" + latest], true);
+      const verified = installed && componentVersion(globalPrefix(), pkg) === latest;
+      if (verified && pkg === PI_WEB_PKG) await runPrepareTerminal(globalPrefix());
+      if (!verified) ok = false;
+      appendLog(updateLogFile(), new Date().toISOString() + " 全局组件 " + pkg + (verified ? " 更新完成\n" : " 更新未完成, 下次启动再检查\n"));
+    }
+    // 分别更新, 一个工具被占用时仍可更新另一个; 全部成功后才记录时间。
     if (ok) {
-      await runPrepareTerminal(globalPrefix());
       fs.writeFileSync(stateFile(), JSON.stringify({ lastGlobalToolsUpdate: Date.now() }));
     }
   } catch (err) {
@@ -448,30 +437,20 @@ function stopServer() {
   if (!serverProcess) return Promise.resolve();
   const child = serverProcess;
   serverProcess = null;
-  // 返回 Promise: 等服务真正退出(否则退出时更新内核会撞上文件锁)
-  const exited = new Promise((resolve) => {
-    child.once("exit", () => resolve());
-    setTimeout(resolve, 2500); // 兜底
+  // 先结束整个进程树, 避免父进程退出后 Next 子进程仍锁住组件目录。
+  return new Promise((resolve) => {
+    const stop = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    stop.on("error", (err) => {
+      appendLog(logFile(), "停止服务失败: " + err.message + "\n");
+      resolve();
+    });
+    stop.on("exit", () => resolve());
   });
-  try {
-    child.kill();
-  } catch {
-    /* ignore */
-  }
-  setTimeout(() => {
-    try {
-      if (child.pid) {
-        spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-          windowsHide: true,
-          stdio: "ignore",
-        });
-      }
-    } catch {
-      /* ignore */
-    }
-  }, 1500);
-  return exited;
 }
+
 
 function startServer(port) {
   return new Promise((resolve, reject) => {
@@ -1508,20 +1487,19 @@ function setupShellAutoUpdate() {
   try {
     const { autoUpdater } = require("electron-updater");
     autoUpdater.autoDownload = true;
-    autoUpdater.on("update-downloaded", (info) => {
+    autoUpdater.on("update-downloaded", async (info) => {
       const r = dialog.showMessageBoxSync({
         type: "info",
-        title: "软件更新",
-        message: `新版本 ${info.version} 已下载完成`,
-        detail: "重新启动应用程序以完成更新。",
-        buttons: ["立即重新启动", "稍后"],
+        title: "Pi Desktop 更新",
+        message: `版本 ${info.version} 已下载`,
+        detail: "重启后完成更新。",
+        buttons: ["重启并更新", "稍后"],
         defaultId: 0,
         cancelId: 1,
       });
       if (r === 0) {
         quitting = true;
-        stopServer();
-        quitUpdateDone = true;
+        await stopServer();
         autoUpdater.quitAndInstall();
       }
     });
@@ -1532,34 +1510,6 @@ function setupShellAutoUpdate() {
   } catch {
     /* dev 模式或缺少更新配置时忽略 */
   }
-}
-
-// ---------------------------------------------------------------------------
-// 看门狗: 复用的外部服务一旦退出(比如用户关掉 cmd 的 pi-web),
-// 自动起应用自己的服务并让窗口重新加载
-// ---------------------------------------------------------------------------
-function startWatchdog() {
-  watchdog = setInterval(async () => {
-    if (quitting || !reusedExternal) return;
-    if (await portResponds(serverPort, 3000)) return;
-    appendLog(logFile(), `${new Date().toISOString()} 外部服务已退出, 启动内置服务\n`);
-    reusedExternal = false;
-    try {
-      serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
-      await startServer(serverPort);
-      for (const entry of tabs.values()) {
-        if (!entry.url.startsWith("http://")) continue;
-        const next = new URL(entry.url);
-        next.port = String(serverPort);
-        entry.url = next.href;
-        if (entry.content && !entry.content.webContents.isDestroyed()) {
-          entry.content.webContents.loadURL(entry.url);
-        }
-      }
-    } catch (err) {
-      appendLog(logFile(), `看门狗重启服务失败: ${err && err.message}\n`);
-    }
-  }, 5000);
 }
 
 // 标签状态轮询: 主进程直接查 pi-web API(不触碰页面, 零渲染开销)
@@ -1625,22 +1575,15 @@ if (!gotLock) {
     trimLog(logFile());
     trimLog(updateLogFile());
     try {
-      // 1. 首次运行: 下载私有内核(一次性)
-      if (!fs.existsSync(kernelBin())) await firstRunInstall();
+      // 1. 服务启动前完成私有组件安装或更新, 避免文件占用和退出时重叠安装。
+      await prepareKernel();
 
-      // 2. 端口策略: 默认端口空闲则启动服务; 已有 pi-web 在跑则直接复用; 否则换空闲端口
-      if (await isPortFree(DEFAULT_PORT)) {
-        serverPort = DEFAULT_PORT;
-        await startServer(serverPort);
-      } else if (await portResponds(DEFAULT_PORT)) {
-        serverPort = DEFAULT_PORT;
-        reusedExternal = true; // 复用的是别人的服务, 由看门狗盯防它退出
-      } else {
-        serverPort = await getFreePort();
-        await startServer(serverPort);
-      }
+      // 2. 桌面客户端使用私有组件; 外部服务占用默认端口时另选空闲端口。
+      serverPort = (await isPortFree(DEFAULT_PORT)) ? DEFAULT_PORT : await getFreePort();
+      await startServer(serverPort);
     } catch (err) {
-      dialog.showErrorBox("启动失败", String((err && err.message) || err));
+      appendLog(updateLogFile(), new Date().toISOString() + " 启动失败: " + String((err && err.message) || err) + "\n");
+      dialog.showErrorBox("无法启动 Pi Desktop", String((err && err.message) || err));
       app.exit(1);
       return;
     }
@@ -1648,7 +1591,6 @@ if (!gotLock) {
     createMainWindow();
     createTray();
     setupShellAutoUpdate();
-    startWatchdog();
     startStatusPoller();
     console.log(`[pi-desktop] 服务就绪: http://${APP_URL_HOST}:${serverPort}`);
 
@@ -1658,21 +1600,10 @@ if (!gotLock) {
 
   app.on("before-quit", (e) => {
     quitting = true;
-    if (watchdog) clearInterval(watchdog);
     if (statusTimer) clearInterval(statusTimer);
-    // 退出时检查内核更新: 先等服务真正退出(无文件锁), 有新版则静默更新完再退出
-    if (!quitUpdateDone && fs.existsSync(kernelBin())) {
-      quitUpdateDone = true;
+    if (serverProcess) {
       e.preventDefault();
-      const timer = setTimeout(() => app.quit(), QUIT_UPDATE_TIMEOUT_MS);
-      stopServer()
-        .then(() => updateKernelOnQuit())
-        .finally(() => {
-          clearTimeout(timer);
-          app.quit();
-        });
-    } else {
-      stopServer();
+      void stopServer().finally(() => app.quit());
     }
   });
 
