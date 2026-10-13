@@ -193,9 +193,10 @@ function waitForServer(port, timeoutMs = 40000) {
   return new Promise((resolve, reject) => {
     const tryOnce = () => {
       http
-        .get({ host: APP_URL_HOST, port, path: "/", timeout: 2000 }, (res) => {
+        .get({ host: APP_URL_HOST, port, path: "/api/sessions", timeout: 2000 }, (res) => {
           res.resume();
-          resolve();
+          if (res.statusCode === 200) resolve();
+          else reject(new Error("项目服务无法加载（HTTP " + res.statusCode + "）。请重新启动后重试。"));
         })
         .on("error", () => {
           if (Date.now() - started > timeoutMs) {
@@ -251,6 +252,7 @@ async function npmInstall(prefix, packages, useGlobalFlag) {
   return new Promise((resolve) => {
     const args = [cli, "install"];
     if (useGlobalFlag) args.push("-g");
+    else args.push("--save-exact");
     args.push(
       `--prefix`, prefix,
       `--registry=${NPM_REGISTRY}`,
@@ -276,21 +278,54 @@ async function npmInstall(prefix, packages, useGlobalFlag) {
   });
 }
 
-async function npmLatestVersion(pkg) {
+async function npmPackageMetadata(pkg, version = "latest") {
   try {
-    const response = await fetch(NPM_REGISTRY + "/" + encodeURIComponent(pkg) + "/latest", {
+    const response = await fetch(NPM_REGISTRY + "/" + encodeURIComponent(pkg) + "/" + encodeURIComponent(version), {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) throw new Error("HTTP " + response.status);
     const metadata = await response.json();
     if (typeof metadata.version !== "string" || !metadata.version) throw new Error("未返回组件版本");
-    return metadata.version;
+    return metadata;
   } catch (err) {
     appendLog(updateLogFile(), new Date().toISOString() + " 版本检查失败 " + pkg + ": " + err.message + "\n");
     return null;
   }
 }
 
+
+async function npmLatestVersion(pkg) {
+  return (await npmPackageMetadata(pkg))?.version || null;
+}
+
+async function configureKernelDependencies(webMetadata) {
+  // Pi Web 的编译产物直接导入 SDK 的子组件, 必须与其声明的 SDK 版本配套。
+  const sdkVersion = webMetadata.dependencies[PI_AGENT_PKG];
+  const webRoot = path.join(privatePrefix(), "node_modules", ...PI_WEB_PKG.split("/"));
+  let sdk = null;
+  for (const prefix of [webRoot, privatePrefix()]) {
+    try {
+      const installed = JSON.parse(fs.readFileSync(path.join(prefix, "node_modules", ...PI_AGENT_PKG.split("/"), "package.json"), "utf8"));
+      if (installed.version === sdkVersion) { sdk = installed; break; }
+    } catch { /* 尚未安装配套 SDK */ }
+  }
+  if (!sdk) sdk = await npmPackageMetadata(PI_AGENT_PKG, sdkVersion);
+  if (!sdk) throw new Error("无法检查组件依赖。请检查网络连接后重试。");
+  const pins = Object.fromEntries(Object.entries(sdk.dependencies)
+    .filter(([pkg]) => pkg.startsWith("@earendil-works/"))
+    .map(([pkg, range]) => [pkg, range.replace(/^[~^]/, "")]));
+  const file = path.join(privatePrefix(), "package.json");
+  let config = {};
+  try { config = JSON.parse(fs.readFileSync(file, "utf8")); } catch { /* 首次安装 */ }
+  const changed = JSON.stringify(config.overrides?.[PI_WEB_PKG]) !== JSON.stringify(pins);
+  if (changed) {
+    config.overrides = { ...config.overrides, [PI_WEB_PKG]: pins };
+    fs.mkdirSync(privatePrefix(), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(config, null, 2));
+  }
+  return changed || Object.entries(pins).some(([pkg, version]) =>
+    (componentVersion(webRoot, pkg) || componentVersion(privatePrefix(), pkg)) !== version);
+}
 
 // pi-web 的 postinstall(prepare-terminal)可能被本机 npm 的脚本审批机制拦截,
 // 安装/更新后手动补跑一次, 保证终端组件就位
@@ -355,7 +390,7 @@ function componentWindowHtml(mode, components) {
     '</div><div class="track" role="progressbar" aria-label="' + heading + '"></div><p class="foot" id="stage">请保持网络连接。</p></body></html>';
 }
 
-async function installKernel(mode, components) {
+async function installKernel(mode, components, repairDependencies = false) {
   const win = new BrowserWindow({
     width: 440, height: 316, useContentSize: true, resizable: false, maximizable: false, minimizable: false,
     closable: false, autoHideMenuBar: true, title: "Pi Desktop - " + { install: "首次安装", update: "组件更新", repair: "组件修复" }[mode],
@@ -363,7 +398,7 @@ async function installKernel(mode, components) {
   });
   try {
     await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(componentWindowHtml(mode, components)));
-    const packages = components.filter(({ current, latest }) => mode !== "update" || (latest && latest !== current))
+    const packages = components.filter(({ current, latest }) => repairDependencies || mode !== "update" || (latest && latest !== current))
       .map(({ pkg, latest }) => pkg + "@" + (latest || "latest"));
     const ok = await npmInstall(privatePrefix(), packages, false);
     if (!ok) throw new Error("组件" + { install: "安装", update: "更新", repair: "修复" }[mode] + "未完成。请检查网络连接后重试。");
@@ -383,15 +418,19 @@ async function installKernel(mode, components) {
 async function prepareKernel() {
   const components = [{ name: "Pi Web", pkg: PI_WEB_PKG }, { name: "Pi", pkg: PI_AGENT_PKG }];
   for (const component of components) component.current = componentVersion(privatePrefix(), component.pkg);
+  const installed = components.some(({ current }) => current) || fs.existsSync(path.join(privatePrefix(), "package.json"));
+  const webMetadata = await npmPackageMetadata(PI_WEB_PKG);
   await Promise.all(components.map(async (component) => {
-    component.latest = await npmLatestVersion(component.pkg);
+    component.latest = component.pkg === PI_WEB_PKG ? webMetadata?.version || null : await npmLatestVersion(component.pkg);
     appendLog(updateLogFile(), new Date().toISOString() + " 组件检查 " + component.name + ": 当前=" + component.current + " 最新=" + component.latest + "\n");
   }));
+  const dependenciesChanged = webMetadata ? await configureKernelDependencies(webMetadata) : false;
   if (!fs.existsSync(kernelBin()) || components.some(({ current }) => !current)) {
-    const installed = components.some(({ current }) => current) || fs.existsSync(path.join(privatePrefix(), "package.json"));
     await installKernel(installed ? "repair" : "install", components);
   } else if (components.some(({ current, latest }) => latest && latest !== current)) {
-    await installKernel("update", components);
+    await installKernel("update", components, dependenciesChanged);
+  } else if (dependenciesChanged) {
+    await installKernel("repair", components);
   }
 }
 

@@ -6,7 +6,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 
 - 仓库：https://github.com/wangjk1996-cloud/Pi-Desktop
 - 本地路径：`C:\Users\Leo\Documents\GitHub\Pi-Desktop`
-- 当前版本：v1.7.10
+- 当前版本：v1.7.11
 - 环境：Windows 11、Git Bash、Node 24、Electron 39、electron-builder 26
 
 ## 1. 架构（读代码前先看这个）
@@ -19,6 +19,7 @@ Pi Desktop 是 pi coding agent 的 Windows 桌面客户端，提供多项目标�
 ### 内核与 npm 运行时（都在用户数据目录，不在安装目录）
 - 用户数据目录：`%APPDATA%\pi-desktop-app\`
 - `kernel/`：私有 npm prefix，装 `@agegr/pi-web` + `@earendil-works/pi-coding-agent`。每次启动服务前分别检查两者的 latest 版本，仅更新有变化的组件；已有完整组件时，版本检查断网不阻止启动。首次安装、组件更新和组件修复使用独立标题、简短提示及版本列表；安装后核对实际版本，再启动服务。组件检查、安装与失败详情写入 `update.log`。
+- 私有 prefix 的 `package.json` 用 `overrides["@agegr/pi-web"]` 将 Pi Web 的 SDK 子组件固定到其 SDK 声明的配套版本，防止编译产物误用顶层新版 Pi 的依赖。顶层独立 Pi 仍更新至 latest。作用域规则随 Pi Web 声明的 SDK 更新，安装后检查实际配套依赖；两者版本号不变但依赖不匹配时执行组件修复。服务启动须确认 `/api/sessions` 返回 200，不能只检查根页面。
 - `npm-runtime/`：内置 npm（打包时以 `vendor/npm-runtime.tar.gz` 携带，首次需要时用 `C:\Windows\System32\tar.exe` 解压）。**必须用系统 tar 的绝对路径**（见坑 #2）。
 - 日志：`pi-desktop-server.log`（服务）、`update.log`（更新），超 5MB 自动截断。
 
@@ -88,6 +89,7 @@ Release 标题、正文和资产规则见第 7 节。上传 `PiDesktop-X.Y.Z-set
 16. Electron 39 中隐藏窗口或未挂载的 `WebContentsView` 加载可能停滞 → 启动时先显示深色页；首页和预载视图加载期间挂到可见窗口，项目页使用透明的上层视图。不要等加载完成后才挂载。
 17. **内置组件已更新但界面仍是旧版** → v1.7.9 会复用默认端口上的命令行服务；该服务可能还在运行旧版。v1.7.10 起始终启动私有服务，端口被占用时换端口。不要只看磁盘包版本，应核对客户端实际使用的服务进程及 `/api/app-update` 中的 `currentVersion`。
 18. **只比较 Pi Web 会漏掉 Pi 单独更新；退出更新与再次打开可重叠安装** → 两个组件分别检查，安装统一在启动服务前执行。不要恢复退出时安装或把组件修复显示成“仅首次运行”。
+19. **Pi Web 0.12.0 + Pi 1.2.0 打开项目 HTTP 500** → Pi Web 编译产物要求 SDK 1.1.0 的 `MCP_TYPESCRIPT_PREAMBLE`，混用顶层 pi-codemode 1.2.0 时该导出不存在。v1.7.11 按 Pi Web 所声明 SDK 的依赖版本生成作用域 overrides，保留独立 Pi 最新版，不修改 pi-web 源码。必须实测项目接口、目录验证和项目打开；组件版本号一致、首页返回 200 都不足以证明内核能用。
 
 ## 5. 甲方的硬性要求（UX 红线，别回归）
 

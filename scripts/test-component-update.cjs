@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
 const { spawn } = require("node:child_process");
+const http = require("node:http");
 
 const repo = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(repo, "main.js"), "utf8");
@@ -12,7 +13,8 @@ const web = "@agegr/pi-web";
 const pi = "@earendil-works/pi-coding-agent";
 let privateDir, globalDir, calls, windows, blocked, latest;
 const context = vm.createContext({
-  fs, path, spawn, console, Date, AbortSignal,
+  fs, path, spawn, console, Date, AbortSignal, http, setTimeout,
+  APP_URL_HOST: "127.0.0.1",
   PI_WEB_PKG: web, PI_AGENT_PKG: pi, NPM_REGISTRY: "https://registry.npmmirror.com",
   GLOBAL_TOOLS_UPDATE_INTERVAL_MS: 4 * 60 * 60 * 1000,
   privatePrefix: () => privateDir, globalPrefix: () => globalDir,
@@ -35,6 +37,12 @@ const context = vm.createContext({
       const split = item.lastIndexOf("@");
       writePackage(prefix, item.slice(0, split), item.slice(split + 1));
     }
+    if (!global) {
+      const config = JSON.parse(fs.readFileSync(path.join(prefix, "package.json")));
+      for (const [pkg, version] of Object.entries(config.overrides[web])) {
+        writePackage(path.join(prefix, "node_modules", ...web.split("/")), pkg, version);
+      }
+    }
     const bin = context.kernelBin();
     fs.mkdirSync(path.dirname(bin), { recursive: true });
     fs.writeFileSync(bin, "");
@@ -47,15 +55,19 @@ function section(from, to) {
   assert(start >= 0 && end > start, from);
   return source.slice(start, end);
 }
-vm.runInContext(section("async function npmLatestVersion(pkg)", "// pi-web 的 postinstall"), context);
+vm.runInContext(section("async function npmPackageMetadata(", "// pi-web 的 postinstall"), context);
 const fetchLatest = context.npmLatestVersion;
+const fetchMetadata = context.npmPackageMetadata;
+vm.runInContext(section("function waitForServer(", "// ---------------------------------------------------------------------------\n// 内置 npm"), context);
 vm.runInContext(section("function componentVersion(", "// ---------------------------------------------------------------------------\n// 服务生命周期"), context);
 vm.runInContext(section("function stopServer()", "function startServer(port)"), context);
 
 function writePackage(prefix, pkg, version) {
   const dir = path.join(prefix, "node_modules", ...pkg.split("/"));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: pkg, version }));
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: pkg, version,
+    dependencies: pkg === pi ? { "@earendil-works/pi-codemode": "^" + version } : undefined,
+  }));
 }
 function reset(name, versions) {
   privateDir = path.join(root, name, "private");
@@ -69,7 +81,14 @@ function reset(name, versions) {
     writePackage(privateDir, pi, versions[1]);
     fs.mkdirSync(path.dirname(context.kernelBin()), { recursive: true });
     fs.writeFileSync(context.kernelBin(), "");
+    const pin = "@earendil-works/pi-codemode";
+    writePackage(privateDir, pin, "1.0.2");
+    fs.writeFileSync(path.join(privateDir, "package.json"), JSON.stringify({ overrides: { [web]: { [pin]: "1.0.2" } } }));
   }
+  context.npmPackageMetadata = async (pkg, version) => {
+    if (pkg === web) return latest[web] ? { version: latest[web], dependencies: { [pi]: "1.0.2" } } : null;
+    return { version, dependencies: { "@earendil-works/pi-codemode": "^" + version } };
+  };
 }
 function savePreview(mode) {
   const dir = path.join(repo, "dist", "component-preview");
@@ -129,10 +148,38 @@ async function main() {
   assert(!fs.existsSync(context.stateFile()));
   console.log("PASS: locked global Pi Web does not block Pi or record false success");
 
+  reset("sdk-isolation", ["0.12.0", "1.2.0"]);
+  latest = { [web]: "0.12.0", [pi]: "1.2.0" };
+  context.npmPackageMetadata = async pkg => pkg === web
+    ? { version: "0.12.0", dependencies: { [pi]: "1.1.0" } }
+    : { version: "1.1.0", dependencies: { "@earendil-works/pi-codemode": "^1.1.0" } };
+  await context.prepareKernel();
+  assert.equal(windows[0].options.title, "Pi Desktop - 组件修复");
+  assert.equal(context.componentVersion(privateDir, pi), "1.2.0");
+  assert.equal(context.componentVersion(path.join(privateDir, "node_modules", ...web.split("/")), "@earendil-works/pi-codemode"), "1.1.0");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(privateDir, "package.json"))).overrides[web], { "@earendil-works/pi-codemode": "1.1.0" });
+  calls = [];
+  await context.prepareKernel();
+  assert.equal(calls.length, 0);
+  console.log("PASS: repair incompatible Pi Web SDK without downgrading latest Pi or reinstalling on every launch");
+
+  context.npmPackageMetadata = fetchMetadata;
   context.fetch = async () => ({ ok: true, json: async () => ({ version: "1.0.2" }) });
   assert.equal(await fetchLatest(pi), "1.0.2");
   context.fetch = async () => { throw new Error("offline"); };
   assert.equal(await fetchLatest(pi), null);
+
+  let apiStatus = 500;
+  const server = http.createServer((req, res) => {
+    res.statusCode = req.url === "/api/sessions" ? apiStatus : 200;
+    res.end("{}");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  await assert.rejects(context.waitForServer(server.address().port), /HTTP 500/);
+  apiStatus = 200;
+  await context.waitForServer(server.address().port);
+  await new Promise(resolve => server.close(resolve));
+  console.log("PASS: startup rejects broken project API even when homepage returns 200");
 
   // Only these two test-owned processes are stopped; no user services are touched.
   const script = "const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1000);";
